@@ -1,0 +1,834 @@
+// LojaFlow — ERP + PDV multi-tenant.
+// ponytail: SQLite p/ rodar sem infra; trocar provider p/ postgresql sobe pra produção
+// sem mudar os models (enums viram String por limitação do SQLite).
+//
+// Regras que o schema precisa sustentar:
+//  - todo dado comercial tem companyId (+ branchId quando é de loja);
+//  - nada de histórico é apagado: soft delete (deletedAt/active) e status;
+//  - venda guarda snapshot de preço/custo/nome — relatório antigo não muda;
+//  - ids são cuid (não incrementais), então a sincronização offline não colide.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- SaaS / planos ----------
+model Plan {
+  id          String   @id @default(cuid())
+  code        String   @unique // basico | pro | premium
+  name        String
+  priceCents  Int      @default(0)
+  maxUsers    Int // -1 = ilimitado
+  maxBranches Int
+  maxRegisters Int
+  maxProducts Int
+  features    String   @default("[]") // JSON: ["relatorios.completo","export","multi.filial",...]
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  companies     Company[]
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id          String    @id @default(cuid())
+  companyId   String
+  planId      String
+  status      String    @default("trial") // trial | active | past_due | cancelled | suspended
+  period      String    @default("monthly") // monthly | yearly
+  startedAt   DateTime  @default(now())
+  trialEndsAt DateTime?
+  nextChargeAt DateTime?
+  cancelledAt DateTime?
+  endsAt      DateTime?
+  amountCents Int       @default(0)
+  provider    String    @default("manual")
+  providerId  String?   @unique
+  checkoutUrl String?
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  plan    Plan    @relation(fields: [planId], references: [id])
+
+  @@index([companyId])
+}
+
+// ---------- Empresa ----------
+model Company {
+  id         String  @id @default(cuid())
+  name       String // razão social
+  tradeName  String? // nome fantasia
+  slug       String  @unique
+  document   String? // CNPJ/CPF
+  phone      String?
+  whatsapp   String?
+  email      String?
+  zip        String?
+  address    String?
+  number     String?
+  complement String?
+  district   String?
+  city       String?
+  state      String?
+  logoPath   String?
+  timezone   String  @default("America/Sao_Paulo")
+  currency   String  @default("BRL")
+  theme      String  @default("light")
+  planId     String
+  // JSON: { allowNegativeStock, maxDiscountPct, requireCustomer, autoPrint, decimals,
+  //         stockControl, cashSangriaLimitCents, receiptFooter }
+  settings   String  @default("{}")
+  onboarded  Boolean @default(false)
+  active     Boolean @default(true)
+
+  // Gateway PIX (Blue). A secret nunca é devolvida ao cliente.
+  pixEnabled   Boolean @default(false)
+  pixSecretKey String?
+
+  // ---- Fiscal (emissão de NF-e/NFC-e por provedor) ----
+  ie             String? // inscrição estadual
+  im             String? // inscrição municipal
+  crt            String  @default("1") // 1=Simples, 2=Simples excesso, 3=Regime normal
+  cnae           String?
+  fiscalProvider String? // focusnfe|nfeio|plugnotas|webmania|enotas|tecnospeed|stub
+  fiscalToken    String? // credencial do provedor — nunca devolvida ao cliente
+  fiscalEnv      String  @default("homologacao") // homologacao|producao
+  fiscalEnabled  Boolean @default(false)
+  nfceSerie      Int     @default(1)
+  nfceProx       Int     @default(1) // próximo número de NFC-e
+  nfeSerie       Int     @default(1)
+  nfeProx        Int     @default(1)
+  cscId          String? // ID do token CSC (NFC-e)
+  csc            String? // CSC/token — nunca devolvido ao cliente
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  plan Plan @relation(fields: [planId], references: [id])
+
+  branches       Branch[]
+  users          User[]
+  invites        Invite[]
+  subscriptions  Subscription[]
+  categories     Category[]
+  products       Product[]
+  stocks         Stock[]
+  movements      StockMovement[]
+  suppliers      Supplier[]
+  entries        StockEntry[]
+  entryItems     StockEntryItem[]
+  customers      Customer[]
+  paymentMethods PaymentMethod[]
+  sales          Sale[]
+  saleItems      SaleItem[]
+  salePayments   SalePayment[]
+  registers      CashRegister[]
+  sessions       CashSession[]
+  cashMovements  CashMovement[]
+  finCategories  FinancialCategory[]
+  finEntries     FinanceEntry[]
+  bankAccounts   BankAccount[]
+  bankTxs        BankTransaction[]
+  costCenters    CostCenter[]
+  fiscalDocs     FiscalDocument[]
+  notifications  Notification[]
+  auditLogs      AuditLog[]
+  idempotency    IdempotencyKey[]
+}
+
+model Branch {
+  id         String  @id @default(cuid())
+  companyId  String
+  name       String
+  document   String?
+  phone      String?
+  zip        String?
+  address    String?
+  city       String?
+  state      String?
+  isMain     Boolean @default(false)
+  active     Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  users     User[]
+  stocks    Stock[]
+  movements StockMovement[]
+  entries   StockEntry[]
+  sales     Sale[]
+  registers CashRegister[]
+  sessions  CashSession[]
+  finEntries FinanceEntry[]
+  fiscalDocs FiscalDocument[]
+
+  @@index([companyId])
+}
+
+// ---------- Usuários / acesso ----------
+model User {
+  id             String    @id @default(cuid())
+  companyId      String
+  branchId       String? // null = acessa todas as filiais
+  name           String
+  email          String
+  passwordHash   String
+  role           String    @default("caixa") // proprietario|admin|gerente|caixa|estoquista|financeiro
+  active         Boolean   @default(true)
+  blockedAt      DateTime?
+  lastLoginAt    DateTime?
+  resetToken     String?
+  resetExpiresAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  company       Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch        Branch?         @relation(fields: [branchId], references: [id])
+  sales         Sale[]          @relation("operator")
+  movements     StockMovement[]
+  entries       StockEntry[]
+  sessions      CashSession[]
+  cashMovements CashMovement[]
+  finEntries    FinanceEntry[]
+  auditLogs     AuditLog[]
+  notifications Notification[]
+
+  @@unique([companyId, email])
+  @@index([companyId])
+}
+
+model Invite {
+  id         String    @id @default(cuid())
+  companyId  String
+  email      String
+  role       String
+  branchId   String?
+  token      String    @unique
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+}
+
+// ---------- Catálogo ----------
+model Category {
+  id          String  @id @default(cuid())
+  companyId   String
+  name        String
+  description String?
+  active      Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  @@index([companyId])
+}
+
+model Product {
+  id           String  @id @default(cuid())
+  companyId    String
+  categoryId   String?
+  name         String
+  description  String?
+  sku          String?
+  internalCode String?
+  barcode      String?
+  brand        String?
+  unit         String  @default("UN") // UN|KG|G|L|ML|CX|PCT
+  saleType     String  @default("UNIT") // UNIT | WEIGHT (quantidade decimal)
+  costCents    Int     @default(0)
+  priceCents   Int     @default(0)
+  minStock     Float   @default(0)
+  maxStock     Float   @default(0)
+  imageUrl     String?
+  active       Boolean @default(true)
+
+  // ---- Dados fiscais (NF-e) ----
+  ncm          String? // 8 dígitos — obrigatório para emitir
+  cest         String? // 7 dígitos — quando sujeito a Substituição Tributária
+  cfop         String? @default("5102") // CFOP padrão de venda
+  origem       String  @default("0") // origem da mercadoria 0-8 (ICMS)
+  csosn        String? @default("102") // situação tributária no Simples Nacional
+  cstIcms      String? // situação tributária ICMS no regime normal
+  cstPis       String? @default("49")
+  cstCofins    String? @default("49")
+  icmsAliqBp   Int? // alíquota ICMS em pontos-base (1850 = 18,50%)
+  pisAliqBp    Int?
+  cofinsAliqBp Int?
+  netWeight    Float? // peso líquido (kg)
+  grossWeight  Float? // peso bruto (kg)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  company    Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category   Category?        @relation(fields: [categoryId], references: [id])
+  stocks     Stock[]
+  movements  StockMovement[]
+  entryItems StockEntryItem[]
+  saleItems  SaleItem[]
+
+  @@index([companyId, name])
+  @@index([companyId, barcode])
+  @@index([companyId, sku])
+  @@index([companyId, active])
+}
+
+// ---------- Estoque ----------
+model Stock {
+  id        String @id @default(cuid())
+  companyId String
+  branchId  String
+  productId String
+  quantity  Float  @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch  Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, productId])
+  @@index([companyId, productId])
+}
+
+model StockMovement {
+  id        String @id @default(cuid())
+  companyId String
+  branchId  String
+  productId String
+  // ENTRADA|SAIDA|VENDA|DEVOLUCAO|AJUSTE|PERDA|TRANSFERENCIA|CANCELAMENTO
+  type      String
+  quantity  Float // sempre positivo; o sinal vem do tipo
+  before    Float
+  after     Float
+  reason    String?
+  refType   String? // Sale | StockEntry | Adjust
+  refId     String?
+  userId    String?
+  createdAtLocal String // "YYYY-MM-DD HH:mm" no fuso da empresa
+
+  createdAt DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch  Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id])
+
+  @@index([companyId, createdAtLocal])
+  @@index([companyId, productId, createdAtLocal])
+  @@index([companyId, type])
+}
+
+// ---------- Compras ----------
+model Supplier {
+  id        String  @id @default(cuid())
+  companyId String
+  name      String
+  tradeName String?
+  document  String?
+  phone     String?
+  whatsapp  String?
+  email     String?
+  address   String?
+  notes     String?
+  active    Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  company    Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  entries    StockEntry[]
+  finEntries FinanceEntry[]
+
+  @@index([companyId, name])
+}
+
+model StockEntry {
+  id         String  @id @default(cuid())
+  companyId  String
+  branchId   String
+  supplierId String?
+  userId     String?
+  document   String? // nota/cupom do fornecedor
+  totalCents Int     @default(0)
+  notes      String?
+  createdAtLocal String
+
+  createdAt DateTime @default(now())
+
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch           @relation(fields: [branchId], references: [id])
+  supplier Supplier?        @relation(fields: [supplierId], references: [id])
+  user     User?            @relation(fields: [userId], references: [id])
+  items    StockEntryItem[]
+
+  @@index([companyId, createdAtLocal])
+}
+
+model StockEntryItem {
+  id        String  @id @default(cuid())
+  companyId String
+  entryId   String
+  productId String
+  quantity  Float
+  costCents Int     @default(0)
+  lot       String?
+  expiresAt String? // "YYYY-MM-DD"
+  notes     String?
+
+  company Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  entry   StockEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  product Product    @relation(fields: [productId], references: [id])
+
+  @@index([entryId])
+  @@index([companyId, productId])
+}
+
+// ---------- Clientes ----------
+model Customer {
+  id        String    @id @default(cuid())
+  companyId String
+  name      String
+  document  String?
+  phone     String?
+  whatsapp  String?
+  email     String?
+  birthdate String? // "YYYY-MM-DD"
+  address   String?
+  notes     String?
+  active    Boolean   @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  company    Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sales      Sale[]
+  finEntries FinanceEntry[]
+
+  @@index([companyId, name])
+  @@index([companyId, phone])
+}
+
+// ---------- Formas de pagamento ----------
+model PaymentMethod {
+  id                String  @id @default(cuid())
+  companyId         String
+  name              String
+  type              String // dinheiro|pix|debito|credito|vale|crediario|outro
+  active            Boolean @default(true)
+  requiresChange    Boolean @default(false) // calcula troco (dinheiro)
+  allowsInstallments Boolean @default(false)
+  maxInstallments   Int     @default(1)
+  feePct            Float   @default(0)
+  sortOrder         Int     @default(0)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  salePayments  SalePayment[]
+  cashMovements CashMovement[]
+  finEntries    FinanceEntry[]
+
+  @@index([companyId])
+}
+
+// ---------- Vendas ----------
+model Sale {
+  id             String  @id @default(cuid())
+  companyId      String
+  branchId       String
+  cashSessionId  String?
+  customerId     String?
+  operatorId     String?
+  number         Int
+  status         String  @default("COMPLETED") // OPEN|COMPLETED|CANCELLED|REFUNDED
+  subtotalCents  Int     @default(0)
+  discountCents  Int     @default(0)
+  totalCents     Int     @default(0)
+  costTotalCents Int     @default(0)
+  receivedCents  Int     @default(0) // dinheiro entregue pelo cliente
+  changeCents    Int     @default(0) // troco
+  notes          String?
+  cancelReason   String?
+  cancelledById  String?
+  cancelledAt    DateTime?
+  soldAt         String // "YYYY-MM-DD HH:mm" no fuso da empresa
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch       @relation(fields: [branchId], references: [id])
+  session  CashSession? @relation(fields: [cashSessionId], references: [id])
+  customer Customer?    @relation(fields: [customerId], references: [id])
+  operator User?        @relation("operator", fields: [operatorId], references: [id])
+
+  items       SaleItem[]
+  payments    SalePayment[]
+  finEntries  FinanceEntry[]
+  fiscalDocs  FiscalDocument[]
+
+  @@unique([companyId, number])
+  @@index([companyId, soldAt])
+  @@index([companyId, status, soldAt])
+  @@index([companyId, customerId])
+  @@index([cashSessionId])
+}
+
+model SaleItem {
+  id            String  @id @default(cuid())
+  companyId     String
+  saleId        String
+  productId     String
+  name          String // snapshot: o cadastro pode mudar depois
+  unit          String  @default("UN")
+  quantity      Float
+  unitPriceCents Int
+  unitCostCents Int     @default(0)
+  discountCents Int     @default(0)
+  totalCents    Int
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([saleId])
+  @@index([companyId, productId])
+}
+
+model SalePayment {
+  id              String @id @default(cuid())
+  companyId       String
+  saleId          String
+  paymentMethodId String
+  methodName      String // snapshot
+  methodType      String
+  amountCents     Int
+  installments    Int    @default(1)
+
+  company Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sale    Sale          @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  method  PaymentMethod @relation(fields: [paymentMethodId], references: [id])
+
+  @@index([saleId])
+  @@index([companyId])
+}
+
+// ---------- Caixa ----------
+model CashRegister {
+  id        String  @id @default(cuid())
+  companyId String
+  branchId  String
+  name      String // "Caixa 1", "PDV Loja"
+  active    Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  company  Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  sessions CashSession[]
+
+  @@index([companyId])
+}
+
+model CashSession {
+  id          String  @id @default(cuid())
+  companyId   String
+  branchId    String
+  registerId  String
+  operatorId  String?
+  status      String  @default("open") // open | closed
+  openingCents Int    @default(0)
+  countedCents Int? // dinheiro contado no fechamento
+  expectedCents Int? // dinheiro esperado (abertura + vendas dinheiro + suprimentos - sangrias)
+  differenceCents Int?
+  closingData String  @default("{}") // JSON: esperado/contado por forma de pagamento
+  openedAt    String // "YYYY-MM-DD HH:mm"
+  closedAt    String?
+  notes       String?
+
+  createdAt DateTime @default(now())
+
+  company   Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch    Branch       @relation(fields: [branchId], references: [id])
+  register  CashRegister @relation(fields: [registerId], references: [id])
+  operator  User?        @relation(fields: [operatorId], references: [id])
+  sales     Sale[]
+  movements CashMovement[]
+
+  @@index([companyId, openedAt])
+  @@index([companyId, status])
+}
+
+model CashMovement {
+  id              String  @id @default(cuid())
+  companyId       String
+  sessionId       String
+  type            String // abertura|venda|sangria|suprimento|estorno
+  amountCents     Int // positivo entra, negativo sai
+  paymentMethodId String?
+  description     String?
+  userId          String?
+  refType         String?
+  refId           String?
+  createdAtLocal  String
+
+  createdAt DateTime @default(now())
+
+  company Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  session CashSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  method  PaymentMethod? @relation(fields: [paymentMethodId], references: [id])
+  user    User?          @relation(fields: [userId], references: [id])
+
+  @@index([sessionId])
+  @@index([companyId, createdAtLocal])
+}
+
+// ---------- Financeiro ----------
+model FinancialCategory {
+  id        String  @id @default(cuid())
+  companyId String
+  name      String
+  type      String // RECEITA | DESPESA
+  active    Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  company Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  entries FinanceEntry[]
+
+  @@index([companyId, type])
+}
+
+/// Contas a pagar/receber, despesas e receitas na mesma tabela.
+/// ponytail: `type` + `status` cobrem os quatro casos do briefing; três tabelas
+/// quase idênticas só multiplicariam relatório e migração.
+model FinanceEntry {
+  id              String  @id @default(cuid())
+  companyId       String
+  branchId        String?
+  categoryId      String?
+  type            String // RECEITA | DESPESA
+  description     String
+  amountCents     Int
+  dueDate         String // "YYYY-MM-DD"
+  paidAt          String? // "YYYY-MM-DD" (pagamento/recebimento efetivo)
+  status          String  @default("pending") // pending | paid | cancelled
+  paymentMethodId String?
+  supplierId      String?
+  customerId      String?
+  saleId          String?
+  recurrence      String? // none|monthly|weekly (gerador roda no job futuro)
+  notes           String?
+  createdById     String?
+
+  // ---- Bancário / instrumento / parcelamento / centro de custo ----
+  bankAccountId  String?
+  costCenterId   String?
+  instrument     String? // dinheiro|pix|boleto|cheque|transferencia|cartao|outro
+  instrumentInfo String? // JSON: boleto {linhaDigitavel, nossoNumero} / cheque {banco, numero, bomPara}
+  installmentGroup String? // agrupa parcelas do mesmo lançamento
+  installmentNo    Int? // nº da parcela (1..N)
+  installmentOf    Int? // total de parcelas (N)
+  reconciledAt     DateTime? // conciliado com o extrato
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  company     Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch      Branch?            @relation(fields: [branchId], references: [id])
+  category    FinancialCategory? @relation(fields: [categoryId], references: [id])
+  method      PaymentMethod?     @relation(fields: [paymentMethodId], references: [id])
+  supplier    Supplier?          @relation(fields: [supplierId], references: [id])
+  customer    Customer?          @relation(fields: [customerId], references: [id])
+  sale        Sale?              @relation(fields: [saleId], references: [id])
+  createdBy   User?              @relation(fields: [createdById], references: [id])
+  bankAccount BankAccount?       @relation(fields: [bankAccountId], references: [id])
+  costCenter  CostCenter?        @relation(fields: [costCenterId], references: [id])
+  bankTxs     BankTransaction[]
+
+  @@index([companyId, dueDate])
+  @@index([companyId, status, type])
+  @@index([companyId, paidAt])
+  @@index([companyId, bankAccountId])
+  @@index([companyId, installmentGroup])
+}
+
+/// Conta bancária, caixa ou carteira. O saldo é opening + soma das movimentações.
+model BankAccount {
+  id           String  @id @default(cuid())
+  companyId    String
+  name         String
+  type         String  @default("corrente") // corrente|poupanca|caixa|carteira|aplicacao
+  bank         String? // nome ou código do banco
+  agency       String?
+  account      String?
+  document     String? // documento do titular
+  openingCents Int     @default(0) // saldo inicial
+  active       Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  company      Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  transactions BankTransaction[]
+  finEntries   FinanceEntry[]
+
+  @@index([companyId, active])
+}
+
+/// Movimento/linha de extrato de uma conta. `financeEntryId` = conciliação.
+model BankTransaction {
+  id             String  @id @default(cuid())
+  companyId      String
+  bankAccountId  String
+  date           String  // "YYYY-MM-DD"
+  description    String
+  amountCents    Int     // positivo = crédito (entrada), negativo = débito (saída)
+  reconciled     Boolean @default(false)
+  financeEntryId String? // vínculo com a conta a pagar/receber
+  externalId     String? // id do extrato importado (evita duplicar)
+  source         String  @default("manual") // manual|baixa|import
+
+  createdAt DateTime @default(now())
+
+  company      Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  account      BankAccount   @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  financeEntry FinanceEntry? @relation(fields: [financeEntryId], references: [id])
+
+  @@index([companyId, bankAccountId, date])
+  @@index([companyId, reconciled])
+}
+
+/// Centro de custo (rateio de despesas/receitas para o DRE gerencial).
+model CostCenter {
+  id        String  @id @default(cuid())
+  companyId String
+  name      String
+  active    Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  company    Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  finEntries FinanceEntry[]
+
+  @@index([companyId, active])
+}
+
+/// Documento fiscal (NF-e/NFC-e) emitido via provedor de API.
+/// `payload` guarda o JSON enviado; `providerRef` é o id no provedor.
+model FiscalDocument {
+  id          String  @id @default(cuid())
+  companyId   String
+  branchId    String?
+  saleId      String?
+  type        String  @default("nfce") // nfce|nfe
+  status      String  @default("draft") // draft|processing|authorized|rejected|cancelled|error
+  environment String  @default("homologacao")
+  number      Int?
+  serie       Int?
+  accessKey   String? // chave de acesso (44 dígitos)
+  protocol    String? // protocolo de autorização
+  providerRef String? // id da nota no provedor
+  provider    String?
+  xmlUrl      String?
+  danfeUrl    String?
+  qrcode      String? // NFC-e: string do QR Code
+  rejectionReason String?
+  payload     String? // JSON enviado ao provedor
+  cancelReason String?
+  createdById String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  issuedAt    DateTime?
+  cancelledAt DateTime?
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch  Branch? @relation(fields: [branchId], references: [id])
+  sale    Sale?   @relation(fields: [saleId], references: [id])
+
+  @@index([companyId, type, status])
+  @@index([companyId, saleId])
+  @@index([companyId, createdAt])
+}
+
+// ---------- Suporte ----------
+model Notification {
+  id        String    @id @default(cuid())
+  companyId String
+  userId    String?
+  type      String // estoque_baixo|sem_estoque|conta_vencendo|assinatura|caixa_pendente|venda
+  title     String
+  body      String?
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  companyId String
+  userId    String?
+  action    String // create|update|delete|cancel|discount|stock|sangria|close|permission|login
+  entity    String
+  entityId  String?
+  data      String   @default("{}") // JSON antes/depois
+  ip        String?
+  createdAt DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id])
+
+  @@index([companyId, createdAt])
+  @@index([companyId, entity, entityId])
+}
+
+/// Requisição repetida (timeout do PDV, reenvio da fila offline) devolve a mesma
+/// resposta em vez de duplicar venda/pagamento.
+model IdempotencyKey {
+  id        String   @id @default(cuid())
+  companyId String
+  key       String
+  scope     String
+  response  String   @default("{}")
+  createdAt DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, scope, key])
+  @@index([companyId, createdAt])
+}

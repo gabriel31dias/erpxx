@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pt-BR" data-page="aceitar-convite">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Aceitar convite · LojaFlow</title>
+<link rel="icon" href="/assets/images/favicon.png" type="image/x-icon">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#363afe">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/fonts.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/font-awesome.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/icofont.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/themify.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/feather-icon.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/scrollbar.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/bootstrap.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/style.css">
+<link id="color" rel="stylesheet" href="/assets/css/color-1.css" media="screen">
+<link rel="stylesheet" type="text/css" href="/assets/css/responsive.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="container-fluid p-0">
+  <div class="row m-0">
+    <div class="col-12 p-0">
+      <div class="login-card login-dark">
+        <div>
+          <div><a class="logo lf-brand" href="/"><img src="/icons/brand-white.png" alt="Blue Vision" class="lf-logo"></a></div>
+          <div class="login-main">
+            <form class="theme-form" novalidate>
+              <h4>Aceitar convite</h4>
+              <p>Crie seu acesso para entrar na equipe.</p>
+              <div id="lf-alert" class="alert d-none" role="alert"></div>
+              <input type="hidden" id="token" name="token">
+              <div class="form-group">
+                <label class="col-form-label" for="name">Seu nome</label>
+                <input class="form-control" id="name" name="name" type="text" required minlength="2">
+                
+              </div>
+              <div class="form-group">
+                <label class="col-form-label" for="password">Senha</label>
+                <input class="form-control" id="password" name="password" type="password" required minlength="8">
+                
+              </div>
+              <div class="form-group mb-0">
+                <div class="text-end mt-3"><button class="btn btn-primary btn-block w-100" type="submit">Entrar na equipe</button></div>
+              </div>
+            </form>
+            <p class="mt-4 mb-0 text-center"><a href="/login.html">Já tenho conta</a></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/assets/js/jquery.min.js"></script>
+<script src="/assets/js/bootstrap/bootstrap.bundle.min.js"></script>
+<script src="/assets/js/icons/feather-icon/feather.min.js"></script>
+<script src="/assets/js/icons/feather-icon/feather-icon.js"></script>
+<script type="module" src="/js/auth.js"></script>
+</body>
+</html>

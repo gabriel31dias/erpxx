@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">
+  <NFe>
+    <infNFe versao="4.00" Id="NFe35260912345678000199550010000010241000010248">
+      <ide>
+        <cUF>35</cUF>
+        <natOp>VENDA DE MERCADORIA</natOp>
+        <mod>55</mod>
+        <serie>1</serie>
+        <nNF>1024</nNF>
+        <dhEmi>2026-09-21T09:00:00-03:00</dhEmi>
+        <tpNF>1</tpNF>
+      </ide>
+      <emit>
+        <CNPJ>12345678000199</CNPJ>
+        <xNome>Distribuidora Exemplo LTDA</xNome>
+        <enderEmit>
+          <xLgr>Rua das Industrias</xLgr>
+          <nro>500</nro>
+          <xMun>Sao Paulo</xMun>
+          <UF>SP</UF>
+        </enderEmit>
+      </emit>
+      <det nItem="1">
+        <prod>
+          <cProd>100</cProd>
+          <cEAN>7890001000000</cEAN>
+          <xProd>REFRIGERANTE COLA 2L</xProd>
+          <NCM>22021000</NCM>
+          <CFOP>5102</CFOP>
+          <uCom>UN</uCom>
+          <qCom>12.0000</qCom>
+          <vUnCom>4.5000</vUnCom>
+          <vProd>54.00</vProd>
+        </prod>
+        <imposto><ICMS><ICMSSN102><orig>0</orig><CSOSN>102</CSOSN></ICMSSN102></ICMS></imposto>
+      </det>
+      <det nItem="2">
+        <prod>
+          <cProd>101</cProd>
+          <cEAN>7890001000137</cEAN>
+          <xProd>REFRIGERANTE GUARANA 2L</xProd>
+          <NCM>22021000</NCM>
+          <CFOP>5102</CFOP>
+          <uCom>UN</uCom>
+          <qCom>12.0000</qCom>
+          <vUnCom>4.2000</vUnCom>
+          <vProd>50.40</vProd>
+        </prod>
+        <imposto><ICMS><ICMSSN102><orig>0</orig><CSOSN>102</CSOSN></ICMSSN102></ICMS></imposto>
+      </det>
+      <det nItem="3">
+        <prod>
+          <cProd>NEW-900</cProd>
+          <cEAN>SEM GTIN</cEAN>
+          <xProd>Agua Mineral sem Gas 500ml</xProd>
+          <NCM>22011000</NCM>
+          <CEST>0300700</CEST>
+          <CFOP>5102</CFOP>
+          <uCom>UN</uCom>
+          <qCom>24.0000</qCom>
+          <vUnCom>0.9000</vUnCom>
+          <vProd>21.60</vProd>
+        </prod>
+        <imposto><ICMS><ICMSSN102><orig>0</orig><CSOSN>500</CSOSN></ICMSSN102></ICMS></imposto>
+      </det>
+      <total>
+        <ICMSTot>
+          <vProd>126.00</vProd>
+          <vNF>126.00</vNF>
+        </ICMSTot>
+      </total>
+      <cobr>
+        <fat>
+          <nFat>1024</nFat>
+          <vOrig>126.00</vOrig>
+          <vLiq>126.00</vLiq>
+        </fat>
+        <dup>
+          <nDup>001</nDup>
+          <dVenc>2026-10-21</dVenc>
+          <vDup>63.00</vDup>
+        </dup>
+        <dup>
+          <nDup>002</nDup>
+          <dVenc>2026-11-21</dVenc>
+          <vDup>63.00</vDup>
+        </dup>
+      </cobr>
+      <pag>
+        <detPag>
+          <indPag>1</indPag>
+          <tPag>15</tPag>
+          <vPag>126.00</vPag>
+        </detPag>
+      </pag>
+    </infNFe>
+  </NFe>
+</nfeProc>

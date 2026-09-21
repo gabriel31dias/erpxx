@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="pt-BR" data-page="cadastro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Criar conta da loja · LojaFlow</title>
+<link rel="icon" href="/assets/images/favicon.png" type="image/x-icon">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#363afe">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/fonts.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/font-awesome.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/icofont.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/themify.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/feather-icon.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/scrollbar.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/bootstrap.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/style.css">
+<link id="color" rel="stylesheet" href="/assets/css/color-1.css" media="screen">
+<link rel="stylesheet" type="text/css" href="/assets/css/responsive.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="container-fluid p-0">
+  <div class="row m-0">
+    <div class="col-12 p-0">
+      <div class="login-card login-dark">
+        <div>
+          <div><a class="logo lf-brand" href="/"><img src="/icons/brand-white.png" alt="Blue Vision" class="lf-logo"></a></div>
+          <div class="login-main">
+            <form class="theme-form" novalidate>
+              <h4>Criar conta da loja</h4>
+              <p>Teste grátis e comece a vender hoje.</p>
+              <div id="lf-alert" class="alert d-none" role="alert"></div>
+              <div class="form-group">
+                <label class="col-form-label" for="companyName">Nome da loja</label>
+                <input class="form-control" id="companyName" name="companyName" type="text" required minlength="2">
+                
+              </div>
+              <div class="form-group">
+                <label class="col-form-label" for="name">Seu nome</label>
+                <input class="form-control" id="name" name="name" type="text" required minlength="2">
+                
+              </div>
+              <div class="form-group">
+                <label class="col-form-label" for="email">E-mail</label>
+                <input class="form-control" id="email" name="email" type="email" required autocomplete="email">
+                
+              </div>
+              <div class="form-group">
+                <label class="col-form-label" for="phone">WhatsApp da loja</label>
+                <input class="form-control" id="phone" name="phone" type="tel" inputmode="tel" placeholder="(11) 99999-9999">
+                
+              </div>
+              <div class="form-group">
+                <label class="col-form-label" for="password">Senha</label>
+                <input class="form-control" id="password" name="password" type="password" required minlength="8">
+                <div class="form-text">Mínimo de 8 caracteres.</div>
+              </div>
+              <div class="form-group">
+                <label class="col-form-label" for="passwordConfirm">Confirmar senha</label>
+                <input class="form-control" id="passwordConfirm" name="passwordConfirm" type="password" required minlength="8">
+                
+              </div>
+              <div class="form-group mb-0">
+                <div class="text-end mt-3"><button class="btn btn-primary btn-block w-100" type="submit">Criar conta</button></div>
+              </div>
+            </form>
+            <p class="mt-4 mb-0 text-center">Já tem conta?<a class="ms-2" href="/login.html">Entrar</a></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/assets/js/jquery.min.js"></script>
+<script src="/assets/js/bootstrap/bootstrap.bundle.min.js"></script>
+<script src="/assets/js/icons/feather-icon/feather.min.js"></script>
+<script src="/assets/js/icons/feather-icon/feather-icon.js"></script>
+<script type="module" src="/js/auth.js"></script>
+</body>
+</html>

@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="pt-BR" data-page="auditoria">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="LojaFlow — ERP e PDV para lojas: vendas, estoque, caixa, financeiro e relatórios.">
+<title>Auditoria · LojaFlow</title>
+<link rel="icon" href="/assets/images/favicon.png" type="image/x-icon">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#363afe">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/fonts.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/font-awesome.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/icofont.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/themify.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/feather-icon.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/scrollbar.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/vendors/bootstrap.css">
+<link rel="stylesheet" type="text/css" href="/assets/css/style.css">
+<link id="color" rel="stylesheet" href="/assets/css/color-1.css" media="screen">
+<link rel="stylesheet" type="text/css" href="/assets/css/responsive.css">
+<link rel="stylesheet" href="/app.css">
+
+</head>
+<body>
+<div class="loader-wrapper"><div class="loader"><div class="loader4"></div></div></div>
+<div class="tap-top"><i data-feather="chevrons-up"></i></div>
+<div class="page-wrapper compact-wrapper" id="pageWrapper">
+  <div class="page-header close_icon">
+    <div class="header-wrapper row m-0">
+      <div class="header-logo-wrapper col-auto p-0">
+        <div class="logo-wrapper"><a href="/" class="lf-brand"><img src="/icons/brand-white.png" alt="Blue Vision" class="lf-logo"></a></div>
+        <div class="toggle-sidebar"><i class="status_toggle middle sidebar-toggle" data-feather="align-center"></i></div>
+      </div>
+      <div class="left-header col-xxl-5 col-xl-6 col-lg-5 col-md-4 col-sm-3 p-0">
+        <div class="d-flex align-items-center gap-2"><h4 class="f-w-600 mb-0" id="lf-greeting">Bem-vindo</h4></div>
+        <div class="welcome-content d-xl-block d-none"><span class="text-truncate col-12" id="lf-company"></span></div>
+      </div>
+      <div class="nav-right col-xxl-7 col-xl-6 col-md-7 col-8 pull-right right-header p-0 ms-auto">
+        <ul class="nav-menus">
+          <li class="d-none d-lg-block"><select class="form-select form-select-sm" id="lf-branch" aria-label="Filial"></select></li>
+          <li class="d-md-block d-none lf-search-wrapper">
+            <div class="form search-form mb-0">
+              <div class="input-group"><span class="input-icon">
+                <svg><use href="/assets/svg/icon-sprite.svg#search-header"></use></svg>
+                <input class="w-100" id="lf-search" type="search" placeholder="Buscar produto, cliente, venda…" aria-label="Busca global"></span>
+              </div>
+            </div>
+            <div class="lf-results d-none" id="lf-search-results"></div>
+          </li>
+          <li><a class="btn btn-primary btn-sm" href="/pdv.html" id="lf-pdv-link">PDV</a></li>
+          <li><div class="mode"><i class="moon" data-feather="moon"></i></div></li>
+          <li class="onhover-dropdown notification-down">
+            <div class="notification-box"><svg><use href="/assets/svg/icon-sprite.svg#notification-header"></use></svg><span class="badge rounded-pill badge-secondary" id="lf-unread" style="display:none"></span></div>
+            <div class="onhover-show-div notification-dropdown">
+              <div class="card mb-0">
+                <div class="card-header p-3">
+                  <div class="common-space d-flex justify-content-between align-items-center">
+                    <h4 class="text-start f-w-600 mb-0">Notificações</h4>
+                    <a class="f-w-500" href="/notificacoes.html">Ver todas</a>
+                  </div>
+                </div>
+                <div class="card-body p-0"><ul class="list-group list-group-flush" id="lf-notifications"></ul></div>
+              </div>
+            </div>
+          </li>
+          <li class="profile-nav onhover-dropdown">
+            <div class="media profile-media">
+              <div class="media-body">
+                <div class="d-flex align-items-center gap-2"><span id="lf-username">…</span><i class="middle fa fa-angle-down"></i></div>
+                <p class="mb-0 font-roboto" id="lf-role"></p>
+              </div>
+            </div>
+            <ul class="profile-dropdown onhover-show-div">
+              <li><a href="/perfil.html"><i data-feather="user"></i><span>Meu perfil</span></a></li>
+              <li><a href="/notificacoes.html"><i data-feather="bell"></i><span>Notificações</span></a></li>
+              <li><a href="/sincronizacao.html"><i data-feather="refresh-cw"></i><span>Sincronização</span></a></li>
+              <li><a class="btn btn-pill btn-outline-primary btn-sm" href="#" id="lf-logout">Sair</a></li>
+            </ul>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="page-body-wrapper">
+    <div class="sidebar-wrapper close_icon" data-layout="stroke-svg">
+      <div class="logo-wrapper"><a href="/" class="lf-brand"><img src="/icons/brand-white.png" alt="Blue Vision" class="lf-logo"></a>
+        <div class="back-btn"><i class="fa fa-angle-left"></i></div>
+        <div class="toggle-sidebar"><i class="status_toggle middle sidebar-toggle" data-feather="grid"></i></div>
+      </div>
+      <div class="logo-icon-wrapper"><a href="/"><i data-feather="shopping-bag"></i></a></div>
+      <nav class="sidebar-main">
+        <div class="left-arrow" id="left-arrow"><i data-feather="arrow-left"></i></div>
+        <div id="sidebar-menu">
+          <ul class="sidebar-links" id="simple-bar">
+            <li class="back-btn"><a href="/"><i data-feather="shopping-bag"></i></a>
+              <div class="mobile-back text-end"><span>Voltar</span><i class="fa fa-angle-right ps-2" aria-hidden="true"></i></div>
+            </li>
+            <li class="pin-title sidebar-main-title"><div><h6>Fixados</h6></div></li>
+            <li class="sidebar-main-title"><div><h6>Operação</h6></div></li>
+              <li class="sidebar-list" data-key="dashboard" data-perm="dashboard.visualizar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-home"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-home"></use></svg><span>Dashboard</span></a>
+     </li>
+              <li class="sidebar-list" data-key="pdv" data-perm="pdv.acessar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/pdv.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-ecommerce"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-ecommerce"></use></svg><span>PDV</span></a>
+     </li>
+              <li class="sidebar-list" data-key="vendas" data-perm="venda.visualizar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/vendas.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-file"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-file"></use></svg><span>Vendas</span></a>
+     </li>
+              <li class="sidebar-list" data-key="caixa" data-perm="caixa.visualizar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/caixa.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-bonus-kit"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-bonus-kit"></use></svg><span>Caixa</span></a>
+     </li>
+              <li class="sidebar-main-title"><div><h6>Cadastros</h6></div></li>
+              <li class="sidebar-list" data-key="produtos" data-perm="produto.visualizar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/produtos.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-to-do"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-to-do"></use></svg><span>Produtos</span></a>
+     </li>
+              <li class="sidebar-list" data-key="estoque" data-perm="estoque.visualizar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/estoque.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-charts"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-charts"></use></svg><span>Estoque</span></a>
+     </li>
+              <li class="sidebar-list" data-key="clientes" data-perm="cliente.visualizar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/clientes.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-contact"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-contact"></use></svg><span>Clientes</span></a>
+     </li>
+              <li class="sidebar-list" data-key="fornecedores" data-perm="fornecedor.visualizar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/fornecedores.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-social"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-social"></use></svg><span>Fornecedores</span></a>
+     </li>
+              <li class="sidebar-main-title"><div><h6>Gestão</h6></div></li>
+              <li class="sidebar-list" data-key="financeiro" data-perm="financeiro.visualizar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/financeiro.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-ecommerce"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-ecommerce"></use></svg><span>Financeiro</span></a>
+     </li>
+              <li class="sidebar-list" data-key="bancos" data-perm="financeiro.visualizar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/bancos.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-bonus-kit"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-bonus-kit"></use></svg><span>Bancos e fluxo</span></a>
+     </li>
+              <li class="sidebar-list" data-key="notas" data-perm="venda.visualizar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/notas.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-file"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-file"></use></svg><span>Notas fiscais</span></a>
+     </li>
+              <li class="sidebar-list" data-key="relatorios" data-perm="relatorio.visualizar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/relatorios.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-charts"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-charts"></use></svg><span>Relatórios</span></a>
+     </li>
+              <li class="sidebar-main-title"><div><h6>Administração</h6></div></li>
+              <li class="sidebar-list" data-key="usuarios" data-perm="usuario.gerenciar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/usuarios.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-user"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-user"></use></svg><span>Equipe e permissões</span></a>
+     </li>
+              <li class="sidebar-list" data-key="empresa" data-perm="empresa.gerenciar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/empresa.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-others"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-others"></use></svg><span>Empresa e filiais</span></a>
+     </li>
+              <li class="sidebar-list" data-key="configuracoes" data-perm="empresa.gerenciar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/configuracoes.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-others"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-others"></use></svg><span>Configurações</span></a>
+     </li>
+              <li class="sidebar-list" data-key="assinatura" data-perm="plano.gerenciar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav" href="/assinatura.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-bonus-kit"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-bonus-kit"></use></svg><span>Assinatura</span></a>
+     </li>
+              <li class="sidebar-list active" data-key="auditoria" data-perm="auditoria.visualizar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav active" href="/auditoria.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-file"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-file"></use></svg><span>Auditoria</span></a>
+     </li>
+          </ul>
+        </div>
+        <div class="right-arrow" id="right-arrow"><i data-feather="arrow-right"></i></div>
+      </nav>
+    </div>
+    <div class="page-body">
+      <div class="container-fluid">
+        <div class="page-title">
+          <div class="row">
+            <div class="col-6"><h3 id="lf-title">Auditoria</h3></div>
+            <div class="col-6">
+              <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="/"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-home"></use></svg></a></li>
+                <li class="breadcrumb-item active" id="lf-crumb">Auditoria</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="container-fluid" id="lf-content">
+        <div class="row"><div class="col-12"><div class="card"><div class="card-body text-center py-5">
+          <div class="spinner-border text-primary" role="status"><span class="sr-only">Carregando…</span></div>
+        </div></div></div></div>
+      </div>
+    </div>
+    <footer class="footer">
+      <div class="container-fluid"><div class="row"><div class="col-md-12 footer-copyright text-center">
+        <p class="mb-0">LojaFlow · ERP e PDV para lojas varejistas</p>
+      </div></div></div>
+    </footer>
+  </div>
+</div>
+<script src="/assets/js/jquery.min.js"></script>
+<script src="/assets/js/bootstrap/bootstrap.bundle.min.js"></script>
+<script src="/assets/js/icons/feather-icon/feather.min.js"></script>
+<script src="/assets/js/icons/feather-icon/feather-icon.js"></script>
+<script src="/assets/js/scrollbar/simplebar.js"></script>
+<script src="/assets/js/scrollbar/custom.js"></script>
+<script src="/assets/js/config.js"></script>
+<script src="/assets/js/sidebar-menu.js"></script>
+<script src="/assets/js/sidebar-pin.js"></script>
+<script src="/assets/js/script.js"></script>
+
+<script type="module" src="/js/shell.js"></script>
+</body>
+</html>
