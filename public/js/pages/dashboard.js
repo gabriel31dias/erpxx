@@ -87,7 +87,12 @@ export default async function render({ content, branchId, can }) {
     chart(vendasBox, {
       chart: { type: 'area', height: 260, toolbar: { show: false } },
       series: [{ name: 'Faturamento', data: data.charts.byDay.map((d) => (d.totalCents / 100).toFixed(2)) }],
-      xaxis: { categories: data.charts.byDay.map((d) => d.date.slice(8) + '/' + d.date.slice(5, 7)) },
+      xaxis: {
+        categories: data.charts.byDay.map((d) => d.date.slice(8) + '/' + d.date.slice(5, 7)),
+        // mês inteiro não cabe no celular: o Apex esconde os rótulos que se sobrepõem
+        labels: { rotate: -45, hideOverlappingLabels: true, trim: true },
+        tickAmount: Math.min(data.charts.byDay.length, 10),
+      },
       colors: ['#7366ff'], dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 },
       yaxis: { labels: { formatter: (v) => `R$ ${Number(v).toFixed(0)}` } },
     });
@@ -103,6 +108,9 @@ export default async function render({ content, branchId, can }) {
       plotOptions: { bar: { horizontal: true, borderRadius: 4 } },
       series: [{ name: 'Quantidade', data: data.charts.topProducts.map((p) => p.quantity) }],
       xaxis: { categories: data.charts.topProducts.map((p) => p.name) },
+      // nome longo empurrava o gráfico para fora do card: corta no eixo, inteiro no tooltip
+      yaxis: { labels: { maxWidth: 140, formatter: (v) => (String(v).length > 22 ? `${String(v).slice(0, 21)}…` : v) } },
+      tooltip: { x: { formatter: (_v, { dataPointIndex }) => data.charts.topProducts[dataPointIndex]?.name ?? '' } },
       colors: ['#54ba4a'], dataLabels: { enabled: false },
     });
 

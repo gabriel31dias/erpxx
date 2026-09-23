@@ -4,3 +4,4 @@ data/*.db*
 .env
 .playwright-mcp
 certs
+data/uploads

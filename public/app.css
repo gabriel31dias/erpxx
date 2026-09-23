@@ -112,3 +112,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .login-card .lf-brand { padding: 10px 16px; }
 .login-card .lf-logo { height: 30px; }
 @media (max-width: 767.98px) { .lf-logo { height: 20px; } }
+
+/* gráficos nunca passam da largura do card (Apex desenha SVG com largura fixa) */
+.lf-chart { width: 100%; max-width: 100%; min-width: 0; overflow: hidden; }
+.card-body:has(> .lf-chart) { min-width: 0; overflow: hidden; }

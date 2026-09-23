@@ -51,21 +51,35 @@ function fillUser(me, page) {
  * escolha — cada navegação recarrega a página, e reabrir a toda hora cansa.
  */
 const MENU_KEY = 'lf.menu';
+// até 991px o tema trata o menu como gaveta sobre a tela (mesmo corte do sidebar-menu.js)
+const menuGaveta = () => window.matchMedia('(max-width: 991px)').matches;
 function wireSidebar() {
   const header = document.querySelector('.page-header');
   const nav = document.querySelector('.sidebar-wrapper');
   if (!header || !nav) return;
-  const aberto = localStorage.getItem(MENU_KEY) === 'aberto';
+  // celular/tablet: sempre começa fechado — a escolha lembrada vale só no desktop
+  // (antes, abrir o menu para navegar fazia a próxima página nascer com ele aberto)
+  const aberto = !menuGaveta() && localStorage.getItem(MENU_KEY) === 'aberto';
   header.classList.toggle('close_icon', !aberto);
   nav.classList.toggle('close_icon', !aberto);
+  document.querySelector('.bg-overlay')?.remove();
 
   document.querySelectorAll('.sidebar-toggle').forEach((botao) => {
     botao.addEventListener('click', () => {
+      if (menuGaveta()) return;
       // o tema troca a classe no próprio clique; lemos o resultado depois dele
       setTimeout(() => {
         localStorage.setItem(MENU_KEY, nav.classList.contains('close_icon') ? 'fechado' : 'aberto');
       }, 60);
     });
+  });
+
+  // celular: tocar num item do menu fecha a gaveta antes de navegar
+  nav.addEventListener('click', (e) => {
+    if (!menuGaveta() || !e.target.closest('a.sidebar-link[href]')) return;
+    header.classList.add('close_icon');
+    nav.classList.add('close_icon');
+    document.querySelector('.bg-overlay')?.remove();
   });
 }
 

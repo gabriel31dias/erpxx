@@ -112,6 +112,7 @@ model Company {
 
   branches       Branch[]
   users          User[]
+  sellers        Seller[]
   invites        Invite[]
   subscriptions  Subscription[]
   categories     Category[]
@@ -126,6 +127,7 @@ model Company {
   sales          Sale[]
   saleItems      SaleItem[]
   salePayments   SalePayment[]
+  saleAttachments SaleAttachment[]
   registers      CashRegister[]
   sessions       CashSession[]
   cashMovements  CashMovement[]
@@ -203,6 +205,32 @@ model User {
   notifications Notification[]
 
   @@unique([companyId, email])
+  @@index([companyId])
+}
+
+/// Vendedor externo: usa o app de pedidos (API /api/ext, token Bearer), não o ERP.
+/// Não é User — não tem perfil, não entra no limite de usuários e não acessa telas.
+model Seller {
+  id           String    @id @default(cuid())
+  companyId    String
+  name         String
+  phone        String?
+  email        String?
+  cpf          String // só dígitos
+  username     String    @unique // login do app; global porque o login não informa a empresa
+  passwordHash String
+  active       Boolean   @default(true)
+  lastLoginAt  DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  company     Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sales       Sale[]
+  attachments SaleAttachment[]
+
+  @@unique([companyId, cpf])
   @@index([companyId])
 }
 
@@ -462,6 +490,11 @@ model Sale {
   cashSessionId  String?
   customerId     String?
   operatorId     String?
+  sellerId       String? // venda enviada por vendedor externo
+  offline          Boolean @default(false) // gerada sem internet no app do vendedor
+  paidInApp        Boolean @default(false) // pagamento já feito no app do vendedor
+  appPaymentMethod String? // pix | cartao | boleto (quando paidInApp)
+  appPaymentRef    String? // id da transação/boleto no app, para conciliação
   number         Int
   status         String  @default("COMPLETED") // OPEN|COMPLETED|CANCELLED|REFUNDED
   subtotalCents  Int     @default(0)
@@ -484,17 +517,20 @@ model Sale {
   session  CashSession? @relation(fields: [cashSessionId], references: [id])
   customer Customer?    @relation(fields: [customerId], references: [id])
   operator User?        @relation("operator", fields: [operatorId], references: [id])
+  seller   Seller?      @relation(fields: [sellerId], references: [id])
 
   items       SaleItem[]
   payments    SalePayment[]
   finEntries  FinanceEntry[]
   fiscalDocs  FiscalDocument[]
+  attachments SaleAttachment[]
 
   @@unique([companyId, number])
   @@index([companyId, soldAt])
   @@index([companyId, status, soldAt])
   @@index([companyId, customerId])
   @@index([cashSessionId])
+  @@index([companyId, sellerId, soldAt])
 }
 
 model SaleItem {
@@ -516,6 +552,28 @@ model SaleItem {
 
   @@index([saleId])
   @@index([companyId, productId])
+}
+
+/// Comprovante de pagamento anexado à venda (foto/PDF). O arquivo fica em disco
+/// (data/uploads/<empresa>/<id>.<ext>); aqui só os metadados.
+model SaleAttachment {
+  id        String   @id @default(cuid())
+  companyId String
+  saleId    String
+  sellerId  String? // enviado pelo app do vendedor externo
+  userId    String? // enviado pelo ERP
+  fileName  String // nome original
+  mimeType  String
+  size      Int
+  path      String // relativo a data/uploads
+  notes     String?
+  createdAt DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  seller  Seller? @relation(fields: [sellerId], references: [id])
+
+  @@index([companyId, saleId])
 }
 
 model SalePayment {

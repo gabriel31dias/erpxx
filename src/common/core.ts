@@ -66,6 +66,7 @@ export const DEFAULT_SETTINGS = {
   decimals: 2,
   sangriaApprovalCents: 50000, // acima disso, exige perfil gerente/admin
   receiptFooter: 'Obrigado pela preferência! Este documento não tem valor fiscal.',
+  extSellerPix: true, // app do vendedor externo gera cobrança PIX no gateway
 };
 export type Settings = typeof DEFAULT_SETTINGS;
 

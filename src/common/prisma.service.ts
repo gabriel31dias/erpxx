@@ -3,8 +3,8 @@ import { PrismaClient } from '@prisma/client';
 
 /** Modelos que pertencem a uma empresa: toda query em massa precisa filtrar por companyId. */
 const TENANT_MODELS = new Set([
-  'Branch', 'User', 'Invite', 'Category', 'Product', 'Stock', 'StockMovement', 'Supplier',
-  'StockEntry', 'StockEntryItem', 'Customer', 'PaymentMethod', 'Sale', 'SaleItem', 'SalePayment',
+  'Branch', 'User', 'Seller', 'Invite', 'Category', 'Product', 'Stock', 'StockMovement', 'Supplier',
+  'StockEntry', 'StockEntryItem', 'Customer', 'PaymentMethod', 'Sale', 'SaleItem', 'SalePayment', 'SaleAttachment',
   'CashRegister', 'CashSession', 'CashMovement', 'FinancialCategory', 'FinanceEntry',
   'Notification', 'AuditLog', 'Subscription', 'IdempotencyKey',
 ]);

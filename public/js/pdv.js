@@ -8,7 +8,7 @@
  * reenviar não duplica.
  */
 import { get, novaChave, post } from './api.js';
-import { pendentes, reenvioAutomatico, sincronizar } from './offline.js';
+import { estado, pendentes, reenvioAutomatico, sincronizar } from './offline.js';
 import {
   $, centsToInput, confirmAction, fmtBRL, fmtQty, h, modal, moneyToCents, parseQty, toast,
 } from './ui.js';
@@ -83,7 +83,7 @@ function escolherProduto(rows) {
         h('small', { class: 'd-block txt-secondary' }, `${p.sku || ''} · estoque ${fmtQty(p.stock, p.unit)}`)),
       h('strong', {}, fmtBRL(p.priceCents)))));
   const m = modal({ title: 'Selecione o produto', body: lista, size: 'modal-lg' });
-  m.el.addEventListener('hidden.bs.modal', () => busca.focus());
+  m.el.addEventListener('hidden.bs.modal', () => focarBusca());
   setTimeout(() => lista.querySelector('button')?.focus(), 150);
 }
 
@@ -111,7 +111,7 @@ function pedirQuantidade(product) {
   };
   ok.onclick = confirmar;
   campo.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); confirmar(); } };
-  m.el.addEventListener('hidden.bs.modal', () => busca.focus());
+  m.el.addEventListener('hidden.bs.modal', () => focarBusca());
   setTimeout(() => { campo.focus(); campo.select(); }, 150);
 }
 
@@ -130,7 +130,7 @@ function alterarQuantidade(index) {
   };
   ok.onclick = confirmar;
   campo.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); confirmar(); } };
-  m.el.addEventListener('hidden.bs.modal', () => busca.focus());
+  m.el.addEventListener('hidden.bs.modal', () => focarBusca());
   setTimeout(() => { campo.focus(); campo.select(); }, 150);
 }
 
@@ -157,7 +157,7 @@ function aplicarDesconto() {
     render();
   };
   valor.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); ok.click(); } };
-  m.el.addEventListener('hidden.bs.modal', () => busca.focus());
+  m.el.addEventListener('hidden.bs.modal', () => focarBusca());
   setTimeout(() => valor.focus(), 150);
 }
 
@@ -177,7 +177,7 @@ async function escolherCliente() {
   const limpar = h('button', { class: 'btn btn-light' }, 'Vender sem cliente');
   const m = modal({ title: 'Cliente da venda', body: h('div', {}, campo, lista), footer: [limpar] });
   limpar.onclick = () => { state.customer = null; m.close(); render(); };
-  m.el.addEventListener('hidden.bs.modal', () => busca.focus());
+  m.el.addEventListener('hidden.bs.modal', () => focarBusca());
   setTimeout(() => campo.focus(), 150);
   carregar();
 }
@@ -215,7 +215,7 @@ function recuperar() {
       h('small', { class: 'd-block txt-secondary' }, new Date(r.at).toLocaleString('pt-BR'))),
     h('strong', {}, fmtBRL(r.totalCents)))));
   const m = modal({ title: 'Vendas suspensas', body: lista });
-  m.el.addEventListener('hidden.bs.modal', () => busca.focus());
+  m.el.addEventListener('hidden.bs.modal', () => focarBusca());
 }
 
 function limpar() {
@@ -224,7 +224,7 @@ function limpar() {
   state.discountCents = 0;
   state.index = -1;
   render();
-  busca.focus();
+  focarBusca();
 }
 
 // ---------- pagamento ----------
@@ -427,11 +427,17 @@ function finalizar() {
     if (editando >= 0) return;
     if (restante() > 0) {
       // PIX com gateway habilitado: cobra online (QR + polling) antes de lançar.
+      // Sem conexão não há gateway: o PIX é lançado direto e a venda segue (vai
+      // para a fila offline como qualquer outra).
       if (metodo?.type === 'pix' && state.pixEnabled && aplicavel() > 0) {
-        acao.disabled = true;
-        const okPix = await cobrarPix(aplicavel(), state.customer);
-        acao.disabled = false;
-        if (!okPix) return; // cancelado ou não pago
+        if (semConexao()) {
+          toast('Sem conexão: PIX lançado sem gerar QR. Confira o recebimento na conta.', 'warning');
+        } else {
+          acao.disabled = true;
+          const okPix = await cobrarPix(aplicavel(), state.customer);
+          acao.disabled = false;
+          if (!okPix) return; // cancelado ou não pago ('offline' segue)
+        }
       }
       if (!lancar()) return;
       if (restante() > 0) {
@@ -524,7 +530,7 @@ function finalizar() {
     }
   }
 
-  m.el.addEventListener('hidden.bs.modal', () => busca.focus());
+  m.el.addEventListener('hidden.bs.modal', () => focarBusca());
   valor.value = centsToInput(devido);
   atualizar({ mantemValor: true });
   setTimeout(() => { valor.focus(); valor.select(); }, 150);
@@ -557,8 +563,13 @@ async function cobrarPix(amountCents, customer) {
       customer: customer ? { name: customer.name, document: customer.document } : undefined,
     });
   } catch (e) {
-    toast(e.message, 'error');
     m.close();
+    // caiu a rede ao gerar o QR: não trava a venda, conclui direto
+    if (e.status === 0) {
+      toast('Sem conexão: PIX lançado sem gerar QR. Confira o recebimento na conta.', 'warning');
+      return 'offline';
+    }
+    toast(e.message, 'error');
     return false;
   }
   if (charge.paid) { m.close(); return true; }
@@ -634,7 +645,7 @@ function vendaConcluida(venda, { offline = false } = {}) {
 
   imprimir_.onclick = () => imprimir(venda);
   nova.onclick = () => m.close();
-  m.el.addEventListener('hidden.bs.modal', () => busca.focus());
+  m.el.addEventListener('hidden.bs.modal', () => focarBusca());
   setTimeout(() => nova.focus(), 150);
   return m;
 }
@@ -737,7 +748,7 @@ async function abrirCaixa({ bloqueante = false } = {}) {
       m.close();
       toast('Caixa aberto. Bom trabalho!');
       await carregarCaixa();
-      busca.focus();
+      focarBusca();
     } catch (e) {
       ok.disabled = false;
       toast(e.message, 'error');
@@ -745,7 +756,7 @@ async function abrirCaixa({ bloqueante = false } = {}) {
   };
   ok.onclick = confirmarAbertura;
   inicial.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); confirmarAbertura(); } };
-  m.el.addEventListener('hidden.bs.modal', () => { state.bloqueado = false; busca.focus(); });
+  m.el.addEventListener('hidden.bs.modal', () => { state.bloqueado = false; focarBusca(); });
   setTimeout(() => { inicial.focus(); inicial.select(); }, 200);
   return m;
 }
@@ -827,6 +838,14 @@ function painelCaixa() {
       h('a', { class: 'pdv-btn text-center', href: `/sessao.html?id=${state.session.id}` }, 'Fechar')));
 }
 
+// celular: focar o campo de leitura abre o teclado virtual a cada ação e cobre
+// a tela — lá o campo só ganha foco quando o operador toca nele.
+/** Sem rede no aparelho, ou servidor sem responder (o módulo offline marca). */
+const semConexao = () => !navigator.onLine || estado.semServidor;
+
+const celular = () => window.matchMedia('(max-width: 767.98px)').matches;
+const focarBusca = () => { if (!celular()) busca.focus(); };
+
 const atalho = (tecla, texto) => h('span', {}, h('span', { class: 'pdv-key' }, tecla), texto);
 
 function render() {
@@ -877,7 +896,15 @@ function render() {
         atalho('F2', 'buscar'), atalho('F4', 'cliente'),
         atalho('F6', 'desconto'), atalho('F8', 'suspender'),
         atalho('F9', 'recuperar'), atalho('F10', 'finalizar'),
-        atalho('DEL', 'remover item'), atalho('ESC', 'limpar venda'))),
+        atalho('DEL', 'remover item'), atalho('ESC', 'limpar venda')),
+      // no celular não há F2…F10: as mesmas ações viram botões (escondidos no desktop)
+      h('div', { class: 'pdv-mobile-actions' },
+        h('button', { class: 'pdv-btn', onclick: aplicarDesconto }, 'Desconto'),
+        h('button', { class: 'pdv-btn', onclick: recuperar }, 'Recuperar'),
+        h('button', {
+          class: 'pdv-btn', disabled: !itens.length,
+          onclick: () => confirmAction('Limpar a venda atual?', { okLabel: 'Limpar' }).then((ok) => ok && limpar()),
+        }, 'Limpar venda'))),
 
     h('footer', { class: 'pdv-total' },
       h('div', {},
@@ -904,7 +931,7 @@ function render() {
     ultimoTotal = valorTotal;
   }
 
-  busca.focus();
+  focarBusca();
   mostrarFila();
 }
 
@@ -932,7 +959,7 @@ async function mostrarFila() {
 function atalhos(e) {
   if (state.bloqueado) return; // caixa fechado: nada opera até abrir
   const dentroDeModal = !!document.querySelector('.modal.show');
-  if (e.key === 'F2') { e.preventDefault(); busca.focus(); busca.select(); }
+  if (e.key === 'F2') { e.preventDefault(); focarBusca(); busca.select(); }
   if (e.key === 'F4') { e.preventDefault(); escolherCliente(); }
   if (e.key === 'F6') { e.preventDefault(); aplicarDesconto(); }
   if (e.key === 'F8') { e.preventDefault(); suspender(); }

@@ -56,6 +56,8 @@ export class AuthGuard implements CanActivate {
     } catch {
       throw new UnauthorizedException('Sessão inválida. Entre novamente.');
     }
+    // token do app do vendedor externo não abre o ERP
+    if ((req.user as any).typ) throw new UnauthorizedException('Sessão inválida. Entre novamente.');
 
     const required = this.reflector.getAllAndOverride<Permission[]>(PERMS_KEY, [ctx.getHandler(), ctx.getClass()]);
     if (required?.length && !required.every((p) => can(req.user!.role, p))) {

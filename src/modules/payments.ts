@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, Controller, Get, Inject, Module, Param, Post,
+  BadRequestException, Body, Controller, Get, Inject, Injectable, Module, Param, Post,
 } from '@nestjs/common';
 import { IsInt, IsOptional, IsString, Min, Max, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -24,12 +24,15 @@ class PixChargeDto {
   @IsOptional() @ValidateNested() @Type(() => PixCustomerDto) customer?: PixCustomerDto;
 }
 
-@Controller('api/payments')
-export class PaymentsController {
+export interface PixCustomer { name?: string | null; document?: string | null; email?: string | null; phone?: string | null }
+
+/** Cliente do gateway PIX (Blue). A secret fica no servidor e nunca volta ao cliente. */
+@Injectable()
+export class PixGateway {
   constructor(@Inject(PRISMA) private db: Db) {}
 
   /** Lê as credenciais do PIX no servidor (a secret nunca sai daqui). */
-  private async config(companyId: string) {
+  async config(companyId: string) {
     const company = await this.db.company.findUnique({
       where: { id: companyId },
       select: { pixEnabled: true, pixSecretKey: true },
@@ -69,15 +72,14 @@ export class PaymentsController {
   }
 
   /** Gera uma cobrança PIX e devolve o QR (imagem + copia-e-cola). */
-  @Post('pix') @Perms('pdv.acessar')
-  async createPix(@CurrentUser() u: SessionUser, @Body() dto: PixChargeDto) {
-    const secret = await this.config(u.companyId);
-    const customer = dto.customer?.name || dto.customer?.document
+  async charge(companyId: string, amountCents: number, description: string, c?: PixCustomer) {
+    const secret = await this.config(companyId);
+    const customer = c?.name || c?.document
       ? {
-        name: dto.customer.name || 'Consumidor Final',
-        ...(dto.customer.document ? { document: { number: dto.customer.document.replace(/\D/g, '') } } : {}),
-        ...(dto.customer.email ? { email: dto.customer.email } : {}),
-        ...(dto.customer.phone ? { phone: dto.customer.phone.replace(/\D/g, '') } : {}),
+        name: c.name || 'Consumidor Final',
+        ...(c.document ? { document: { number: c.document.replace(/\D/g, '') } } : {}),
+        ...(c.email ? { email: c.email } : {}),
+        ...(c.phone ? { phone: c.phone.replace(/\D/g, '') } : {}),
       }
       : { name: 'Consumidor Final' };
 
@@ -85,10 +87,10 @@ export class PaymentsController {
       method: 'POST',
       body: JSON.stringify({
         paymentMethod: 'PIX',
-        amount: dto.amountCents,
+        amount: amountCents,
         installments: 1,
         customer,
-        items: [{ title: dto.description || 'Venda PDV', unitPrice: dto.amountCents, quantity: 1 }],
+        items: [{ title: description, unitPrice: amountCents, quantity: 1 }],
       }),
     });
 
@@ -101,23 +103,42 @@ export class PaymentsController {
       paid: PAID.includes(String(data.status)),
       qrcode: copia,
       qrImage,
-      expiresAt: data?.pix?.expirationDate ?? null,
+      expiresAt: (data?.pix?.expirationDate ?? null) as string | null,
     };
+  }
+
+  /** Status da cobrança no gateway. */
+  async status(companyId: string, id: string) {
+    const secret = await this.config(companyId);
+    const data = await this.blue(secret, `/transactions/${encodeURIComponent(id)}`);
+    return {
+      id: (data?.id ?? id) as string,
+      status: (data?.status ?? 'unknown') as string,
+      paid: PAID.includes(String(data?.status)),
+      paidAt: (data?.paidAt ?? null) as string | null,
+      qrcode: (data?.pix?.qrcode ?? null) as string | null,
+      expiresAt: (data?.pix?.expirationDate ?? null) as string | null,
+    };
+  }
+}
+
+@Controller('api/payments')
+export class PaymentsController {
+  constructor(private pix: PixGateway) {}
+
+  /** Gera uma cobrança PIX e devolve o QR (imagem + copia-e-cola). */
+  @Post('pix') @Perms('pdv.acessar')
+  createPix(@CurrentUser() u: SessionUser, @Body() dto: PixChargeDto) {
+    return this.pix.charge(u.companyId, dto.amountCents, dto.description || 'Venda PDV', dto.customer);
   }
 
   /** Consulta o status da cobrança (polling do PDV). */
   @Get('pix/:id') @Perms('pdv.acessar')
   async statusPix(@CurrentUser() u: SessionUser, @Param('id') id: string) {
-    const secret = await this.config(u.companyId);
-    const data = await this.blue(secret, `/transactions/${encodeURIComponent(id)}`);
-    return {
-      id: data?.id ?? id,
-      status: data?.status ?? 'unknown',
-      paid: PAID.includes(String(data?.status)),
-      paidAt: data?.paidAt ?? null,
-    };
+    const { qrcode, expiresAt, ...status } = await this.pix.status(u.companyId, id);
+    return status;
   }
 }
 
-@Module({ controllers: [PaymentsController] })
+@Module({ controllers: [PaymentsController], providers: [PixGateway], exports: [PixGateway] })
 export class PaymentsModule {}

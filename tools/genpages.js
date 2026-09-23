@@ -52,6 +52,7 @@ const MENU = [
   { key: 'relatorios', href: '/relatorios.html', label: 'Relatórios', icon: 'charts', perm: 'relatorio.visualizar' },
   { group: 'Administração' },
   { key: 'usuarios', href: '/usuarios.html', label: 'Equipe e permissões', icon: 'user', perm: 'usuario.gerenciar' },
+  { key: 'vendedores', href: '/vendedores.html', label: 'Vendedores externos', icon: 'contact', perm: 'usuario.gerenciar' },
   { key: 'empresa', href: '/empresa.html', label: 'Empresa e filiais', icon: 'others', perm: 'empresa.gerenciar' },
   { key: 'configuracoes', href: '/configuracoes.html', label: 'Configurações', icon: 'others', perm: 'empresa.gerenciar' },
   { key: 'assinatura', href: '/assinatura.html', label: 'Assinatura', icon: 'bonus-kit', perm: 'plano.gerenciar' },
@@ -282,6 +283,7 @@ const pages = [
   ['lancamento', 'Lançamento financeiro', 'lancamento.html', ''],
   ['relatorios', 'Relatórios', 'relatorios.html', APEX],
   ['usuarios', 'Equipe e permissões', 'usuarios.html', ''],
+  ['vendedores', 'Vendedores externos', 'vendedores.html', ''],
   ['empresa', 'Empresa e filiais', 'empresa.html', ''],
   ['configuracoes', 'Configurações', 'configuracoes.html', ''],
   ['assinatura', 'Assinatura', 'assinatura.html', ''],
@@ -315,8 +317,7 @@ const submit = (label) =>
 fs.writeFileSync(path.join(OUT, 'login.html'), authPage('login', 'Entrar na sua conta', 'Informe e-mail e senha para acessar a loja.',
   [group('E-mail', text('email', 'email', 'email', 'autocomplete="email" required')),
    group('Senha', text('password', 'password', 'password', 'autocomplete="current-password" required')),
-   submit('Entrar'),
-   `              <p class="text-muted mt-3 mb-0 f-12">Demonstração: <strong>proprietaria@bompreco.com.br</strong> · senha <strong>senha1234</strong></p>`].join('\n'),
+   submit('Entrar')].join('\n'),
   '<a href="/esqueci-senha.html">Esqueci minha senha</a><span class="mx-2">·</span><a href="/cadastro.html">Cadastrar minha loja</a>'));
 
 fs.writeFileSync(path.join(OUT, 'cadastro.html'), authPage('cadastro', 'Criar conta da loja', 'Teste grátis e comece a vender hoje.',

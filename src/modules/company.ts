@@ -32,6 +32,7 @@ class SettingsDto {
   @IsOptional() @IsBoolean() stockControl?: boolean;
   @IsOptional() @IsBoolean() requireCustomer?: boolean;
   @IsOptional() @IsBoolean() autoPrint?: boolean;
+  @IsOptional() @IsBoolean() extSellerPix?: boolean;
   @IsOptional() @IsNumber() @Min(0) maxDiscountPct?: number;
   @IsOptional() @IsInt() @Min(0) sangriaApprovalCents?: number;
   @IsOptional() @IsInt() @Min(0) decimals?: number;

@@ -9,9 +9,13 @@ process.env.NODE_ENV = 'test';
 process.env.PLAN_BASICO_LIMITS = '3,1,1,500';
 process.env.PLAN_PRO_LIMITS = '10,2,3,5000';
 process.env.PLAN_PRO_FEATURES = 'relatorios.basico,export,importacao';
+// gateway PIX falso (sobe no main) — nunca chama a Blue de verdade
+process.env.PIX_API_BASE = 'http://127.0.0.1:47811';
+process.env.UPLOADS_DIR = require('path').join(__dirname, '..', 'data', 'test-uploads');
 
 import * as assert from 'assert';
 import { execSync } from 'child_process';
+import { createServer } from 'http';
 import { rmSync } from 'fs';
 import { join } from 'path';
 import { NestFactory } from '@nestjs/core';
@@ -52,12 +56,25 @@ function client(base: string) {
 }
 
 async function main() {
+  rmSync(process.env.UPLOADS_DIR!, { recursive: true, force: true });
   for (const f of ['test.db', 'test.db-journal', 'test.db-wal', 'test.db-shm']) {
     rmSync(join(__dirname, '..', 'data', f), { force: true });
   }
   execSync('npx prisma db push --skip-generate --accept-data-loss', {
     cwd: join(__dirname, '..'), stdio: 'ignore', env: process.env,
   });
+
+  const pixMock = { paid: false, charges: 0 };
+  const gateway = createServer((req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    if (req.method === 'POST' && req.url === '/transactions') {
+      pixMock.charges++;
+      return res.end(JSON.stringify({ id: 'tx_teste', status: 'waiting_payment',
+        pix: { qrcode: '00020126580014br.gov.bcb.pix0136teste', expirationDate: '2026-12-31T23:59:00Z' } }));
+    }
+    res.end(JSON.stringify({ id: 'tx_teste', status: pixMock.paid ? 'paid' : 'waiting_payment',
+      paidAt: pixMock.paid ? '2026-09-23T10:00:00Z' : null, pix: { qrcode: '00020126580014br.gov.bcb.pix0136teste' } }));
+  }).listen(47811);
 
   const db = new PrismaClient();
   const { syncPlans } = await import('../src/modules/billing');
@@ -249,7 +266,7 @@ async function main() {
     const atual = await api('GET', '/api/cash/current');
     assert.equal(atual.data.summary.totals.salesCents, 2000);
     assert.equal(atual.data.summary.cashOnHandCents, 11000); // 10000 + 1000 em dinheiro
-    const fin = await api('GET', '/api/finance/entries?type=RECEITA');
+    const fin = await api('GET', '/api/finance/entries?type=RECEITA&pageSize=100');
     assert.ok(fin.data.rows.some((r: any) => r.amountCents === 2000 && r.status === 'paid'));
   });
 
@@ -454,7 +471,7 @@ async function main() {
   });
 
   await check('lançamento de venda não pode ser editado à mão', async () => {
-    const fin = await api('GET', '/api/finance/entries?type=RECEITA');
+    const fin = await api('GET', '/api/finance/entries?type=RECEITA&pageSize=100');
     const daVenda = fin.data.rows.find((r: any) => r.saleId);
     const r = await api('PATCH', `/api/finance/entries/${daVenda.id}`, {
       type: 'RECEITA', description: 'x', amountCents: 1, dueDate: '2026-01-01',
@@ -462,7 +479,200 @@ async function main() {
     assert.equal(r.status, 400);
   });
 
+
+  // ---------- vendedor externo ----------
+  console.log('\nVendedor externo');
+  const bearer = (token?: string) => async (method: string, path: string, body?: any) => {
+    const res = await fetch(base + path, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return { status: res.status, data: await res.json().catch(() => null) };
+  };
+  const pedido = await api('POST', '/api/products', { name: 'Caderno', priceCents: 2000, costCents: 800, initialStock: 5 });
+  const vendedor = await api('POST', '/api/sellers', {
+    name: 'Carlos Rua', phone: '11999990000', email: 'carlos@teste.com',
+    cpf: '529.982.247-25', username: 'carlos.rua', password: 'senha1234',
+  });
+
+  await check('cadastro valida CPF e usuário único', async () => {
+    assert.equal(vendedor.status, 201);
+    const cpfRuim = await api('POST', '/api/sellers', { name: 'X', cpf: '111.111.111-11', username: 'xx.yy', password: 'senha1234' });
+    assert.equal(cpfRuim.status, 400);
+    const repetido = await outra('POST', '/api/sellers', { name: 'Yuri', cpf: '11144477735', username: 'carlos.rua', password: 'senha1234' });
+    assert.equal(repetido.status, 409);
+  });
+
+  const login = await bearer()('POST', '/api/ext/auth/login', { username: 'Carlos.Rua', password: 'senha1234' });
+  const ext = bearer(login.data?.token);
+  await check('login por usuário e senha devolve token Bearer', async () => {
+    assert.equal(login.status, 201);
+    assert.equal(login.data.tokenType, 'Bearer');
+    const errado = await bearer()('POST', '/api/ext/auth/login', { username: 'carlos.rua', password: 'errada123' });
+    assert.equal(errado.status, 401);
+    assert.equal((await bearer()('GET', '/api/ext/products')).status, 401);
+    const porEmail = await bearer()('POST', '/api/ext/auth/login', { username: 'Carlos@Teste.com', password: 'senha1234' });
+    assert.equal(porEmail.status, 201);
+  });
+
+  await check('token do vendedor não abre o ERP', async () => {
+    const r = await fetch(`${base}/api/auth/me`, { headers: { cookie: `lf_session=${login.data.token}` } });
+    assert.equal(r.status, 401);
+  });
+
+  await check('produtos e clientes vêm completos, sem paginação', async () => {
+    const produtos = await ext('GET', '/api/ext/products');
+    assert.equal(produtos.data.total, produtos.data.rows.length);
+    assert.equal(produtos.data.rows.find((p: any) => p.id === pedido.data.id).stock, 5);
+    assert.ok(!('costCents' in produtos.data.rows[0]));
+    const clientes = await ext('GET', '/api/ext/customers');
+    assert.equal(clientes.data.total, clientes.data.rows.length);
+  });
+
+  const metodos = await ext('GET', '/api/ext/payment-methods');
+  const pixExt = metodos.data.rows.find((m: any) => m.type === 'pix');
+  const lote = {
+    sales: [
+      { idempotencyKey: 'aparelho-0001', soldAt: '2026-01-05 10:30', offline: true, paidInApp: true, appPaymentMethod: 'pix', appPaymentRef: 'E123',
+        items: [{ productId: pedido.data.id, quantity: 2 }], payments: [{ paymentMethodId: pixExt.id, amountCents: 4000 }] },
+      { idempotencyKey: 'aparelho-0002', offline: false, paidInApp: false,
+        items: [{ productId: pedido.data.id, quantity: 99 }], payments: [{ paymentMethodId: pixExt.id, amountCents: 198000 }] },
+    ],
+  };
+  const envio = await ext('POST', '/api/ext/sales/batch', lote);
+
+  await check('lote grava cada venda de forma independente', async () => {
+    assert.equal(envio.status, 201);
+    assert.equal(envio.data.accepted, 1);
+    assert.equal(envio.data.rejected, 1);
+    assert.equal(envio.data.results[1].ok, false); // sem estoque
+    const produtos = await ext('GET', '/api/ext/products');
+    assert.equal(produtos.data.rows.find((p: any) => p.id === pedido.data.id).stock, 3);
+  });
+
+  await check('reenviar o lote não duplica a venda', async () => {
+    const again = await ext('POST', '/api/ext/sales/batch', { sales: [lote.sales[0]] });
+    assert.equal(again.data.results[0].saleId, envio.data.results[0].saleId);
+    const lista = await ext('GET', '/api/ext/sales?page=1&pageSize=10');
+    assert.equal(lista.data.total, 1);
+    assert.equal(lista.data.rows[0].soldAt, '2026-01-05 10:30');
+    assert.equal(lista.data.rows[0].seller.name, 'Carlos Rua');
+  });
+
+  await check('lote guarda se foi offline e se foi pago no app', async () => {
+    const lista = await ext('GET', '/api/ext/sales');
+    const v = lista.data.rows[0];
+    assert.equal(v.offline, true);
+    assert.equal(v.paidInApp, true);
+    assert.equal(v.appPaymentMethod, 'pix');
+    assert.equal(v.appPaymentRef, 'E123');
+    // estoque restante do caderno é 3: uma unidade por venda
+    const umItem = { items: [{ productId: pedido.data.id, quantity: 1 }], payments: [{ paymentMethodId: pixExt.id, amountCents: 2000 }] };
+    const boleto = await ext('POST', '/api/ext/sales/batch', { sales: [{ ...lote.sales[0], idempotencyKey: 'aparelho-0005',
+      appPaymentMethod: 'boleto', appPaymentRef: '000123', dueDate: '2026-10-10', ...umItem }] });
+    const naoPaga = await ext('POST', '/api/ext/sales/batch', { sales: [{ ...lote.sales[0], idempotencyKey: 'aparelho-0006',
+      paidInApp: false, appPaymentMethod: undefined, ...umItem }] });
+    const fin = await api('GET', '/api/finance/entries?type=RECEITA&pageSize=100');
+    const lanc = (id: string) => fin.data.rows.find((r: any) => r.saleId === id);
+    assert.equal(lanc(envio.data.results[0].saleId).status, 'paid'); // PIX pago no app
+    const b = lanc(boleto.data.results[0].saleId);
+    assert.equal(b.status, 'pending');
+    assert.equal(b.dueDate, '2026-10-10');
+    assert.equal(b.instrument, 'boleto');
+    assert.equal(lanc(naoPaga.data.results[0].saleId).status, 'pending');
+    // ERP: lista marca como não paga e filtra
+    const naoPagas = await api('GET', '/api/sales?paid=no&pageSize=100');
+    assert.ok(naoPagas.data.rows.every((v: any) => v.paymentStatus === 'unpaid'));
+    assert.ok(naoPagas.data.rows.some((v: any) => v.id === boleto.data.results[0].saleId));
+    assert.equal(naoPagas.data.rows.find((v: any) => v.id === boleto.data.results[0].saleId).dueDate, '2026-10-10');
+    assert.equal(naoPagas.data.summary.unpaidCount, naoPagas.data.total);
+    const pagas = await api('GET', '/api/sales?paid=yes&pageSize=100');
+    assert.ok(!pagas.data.rows.some((v: any) => v.id === boleto.data.results[0].saleId));
+    assert.equal((await api('GET', `/api/sales/${envio.data.results[0].saleId}`)).data.sale.paymentStatus, 'paid');
+    const semMetodo = await ext('POST', '/api/ext/sales/batch', { sales: [{ ...lote.sales[0], idempotencyKey: 'aparelho-0003', appPaymentMethod: undefined }] });
+    assert.equal(semMetodo.status, 400);
+    const metodoRuim = await ext('POST', '/api/ext/sales/batch', { sales: [{ ...lote.sales[0], idempotencyKey: 'aparelho-0004', appPaymentMethod: 'cheque' }] });
+    assert.equal(metodoRuim.status, 400);
+  });
+
+  await check('venda PIX online devolve QR e copia e cola', async () => {
+    const semPix = await ext('POST', '/api/ext/sales/pix', { idempotencyKey: 'pix-venda-000', items: [{ productId: pedido.data.id, quantity: 1 }] });
+    assert.equal(semPix.status, 400); // PIX da loja desligado
+    const empresa = await db.company.findFirstOrThrow({ where: { name: 'Loja Teste' } });
+    await db.company.update({ where: { id: empresa.id }, data: { pixEnabled: true, pixSecretKey: 'sk_teste' } });
+
+    assert.equal((await ext('GET', '/api/ext/me')).data.pix, true); // padrão: ligado
+    await api('PATCH', '/api/company/settings', { extSellerPix: false });
+    const desligado = await ext('POST', '/api/ext/sales/pix', { idempotencyKey: 'pix-venda-002', items: [{ productId: pedido.data.id, quantity: 1 }] });
+    assert.equal(desligado.status, 400);
+    assert.equal((await ext('GET', '/api/ext/me')).data.pix, false);
+    await api('PATCH', '/api/company/settings', { extSellerPix: true });
+
+    const body = { idempotencyKey: 'pix-venda-001', items: [{ productId: pedido.data.id, quantity: 1 }] };
+    const r = await ext('POST', '/api/ext/sales/pix', body);
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.totalCents, 2000);
+    assert.equal(r.data.pix.qrcode, '00020126580014br.gov.bcb.pix0136teste');
+    assert.ok(r.data.pix.qrImage.startsWith('data:image/png;base64,'));
+    const again = await ext('POST', '/api/ext/sales/pix', body);
+    assert.equal(again.data.saleId, r.data.saleId);
+    assert.equal(pixMock.charges, 1); // repetir não gera outra cobrança
+
+    const fin = async () => (await api('GET', '/api/finance/entries?type=RECEITA&pageSize=100')).data.rows
+      .find((x: any) => x.saleId === r.data.saleId);
+    assert.equal((await fin()).status, 'pending');
+    const aguardando = await ext('GET', `/api/ext/sales/${r.data.saleId}/pix`);
+    assert.equal(aguardando.data.paid, false);
+
+    pixMock.paid = true;
+    const pago = await ext('GET', `/api/ext/sales/${r.data.saleId}/pix`);
+    assert.equal(pago.data.paid, true);
+    assert.equal((await fin()).status, 'paid');
+    const venda = await ext('GET', `/api/ext/sales/${r.data.saleId}`);
+    assert.equal(venda.data.paidInApp, true);
+    assert.equal(venda.data.appPaymentRef, 'tx_teste');
+  });
+
+  await check('comprovante de pagamento anexado à venda', async () => {
+    const saleId = envio.data.results[0].saleId;
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 1)]);
+    const enviar = (buf: Buffer, nome: string, id = saleId) => {
+      const form = new FormData();
+      form.append('file', new Blob([new Uint8Array(buf)]), nome);
+      form.append('notes', 'PIX do cliente');
+      return fetch(`${base}/api/ext/sales/${id}/receipts`, {
+        method: 'POST', body: form, headers: { Authorization: `Bearer ${login.data.token}` },
+      });
+    };
+    assert.equal((await enviar(Buffer.from('<script>alert(1)</script>'), 'x.png')).status, 400); // conteúdo não é imagem
+    assert.equal((await enviar(png, 'c.png', 'nao-existe')).status, 404);
+    const r = await enviar(png, 'comprovante.png');
+    assert.equal(r.status, 201);
+    const att = await r.json();
+    assert.equal(att.mimeType, 'image/png');
+    assert.equal(att.notes, 'PIX do cliente');
+
+    const lista = await ext('GET', `/api/ext/sales/${saleId}/receipts`);
+    assert.equal(lista.data.rows.length, 1);
+    const arq = await fetch(`${base}/api/ext/receipts/${att.id}/file`, { headers: { Authorization: `Bearer ${login.data.token}` } });
+    assert.equal(arq.headers.get('content-type'), 'image/png');
+    assert.ok(Buffer.from(await arq.arrayBuffer()).equals(png));
+    // ERP da loja enxerga; outra empresa não
+    assert.equal((await api('GET', `/api/sales/${saleId}/attachments`)).data.rows.length, 1);
+    assert.equal((await api('GET', `/api/sales/${saleId}`)).data.sale.attachments.length, 1);
+    assert.equal((await outra('GET', `/api/sales/attachments/${att.id}/file`)).status, 404);
+  });
+
+  await check('vendedor bloqueado perde o acesso na hora', async () => {
+    await api('PATCH', `/api/sellers/${vendedor.data.id}`, {
+      name: 'Carlos Rua', cpf: '52998224725', username: 'carlos.rua', active: false,
+    });
+    assert.equal((await ext('GET', '/api/ext/sales')).status, 401);
+  });
+
   await app.close();
+  gateway.close();
   await db.$disconnect();
 
   console.log(failures ? `\n${failures} verificação(ões) falharam\n` : '\nTudo certo\n');

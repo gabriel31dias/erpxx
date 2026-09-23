@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, Controller, ForbiddenException, Get, Inject, Module,
+  BadRequestException, Body, Controller, ForbiddenException, Get, Inject, Injectable, Module,
   NotFoundException, Param, Post, Query, Req,
 } from '@nestjs/common';
 import { IsArray, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
@@ -15,8 +15,9 @@ import { StockService } from './stock';
 import { fmtBRL, itemTotalCents, paging, roundQty } from '../common/util';
 
 export const SALE_STATUS = ['OPEN', 'COMPLETED', 'CANCELLED', 'REFUNDED'];
+const UNPAID = { status: 'pending', deletedAt: null };
 
-class SaleItemDto {
+export class SaleItemDto {
   @IsString() productId!: string;
   @IsNumber() @Min(0.001) quantity!: number;
   @IsOptional() @IsInt() @Min(0) discountCents?: number;
@@ -24,7 +25,7 @@ class SaleItemDto {
   @IsOptional() @IsInt() @Min(0) unitPriceCents?: number;
 }
 
-class SalePaymentDto {
+export class SalePaymentDto {
   @IsString() paymentMethodId!: string;
   @IsInt() @Min(1) amountCents!: number;
   @IsOptional() @IsInt() @Min(1) installments?: number;
@@ -32,7 +33,7 @@ class SalePaymentDto {
   @IsOptional() @IsInt() @Min(0) receivedCents?: number;
 }
 
-class SaleDto {
+export class SaleDto {
   @IsOptional() @IsString() branchId?: string;
   @IsOptional() @IsString() customerId?: string;
   @IsOptional() @IsString() cashSessionId?: string;
@@ -49,119 +50,66 @@ class CancelDto {
   @IsOptional() @IsString() idempotencyKey?: string;
 }
 
-@Controller('api/sales')
-@Perms('venda.visualizar')
-export class SalesController {
+export interface SaleActor {
+  companyId: string;
+  branchId: string | null;
+  role: string; // vendedor externo não tem perfil do ERP: nenhuma permissão extra
+  userId: string | null; // operador (User)
+  sellerId: string | null; // vendedor externo (Seller)
+}
+
+/** Dados que só o app do vendedor externo informa. */
+export interface ExtSaleInfo {
+  offline: boolean;
+  paidInApp: boolean;
+  appPaymentMethod: string | null;
+  appPaymentRef: string | null;
+  dueDate?: string; // vencimento da conta a receber ("YYYY-MM-DD"), quando fica pendente
+}
+
+export const SALE_INCLUDE = {
+  customer: { select: { id: true, name: true, document: true, phone: true } },
+  operator: { select: { id: true, name: true } },
+  seller: { select: { id: true, name: true } },
+  branch: { select: { id: true, name: true } },
+  items: { include: { product: { select: { id: true, name: true, sku: true } } } },
+  payments: true,
+  attachments: {
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, fileName: true, mimeType: true, size: true, notes: true, createdAt: true },
+  },
+} as const;
+
+/**
+ * Finalização atômica: valida → grava venda → pagamentos → baixa estoque →
+ * registra caixa e financeiro. Qualquer falha desfaz tudo.
+ * Usada pelo PDV e pelo lote do vendedor externo — as regras são as mesmas.
+ */
+@Injectable()
+export class SalesService {
   constructor(
     @Inject(PRISMA) private db: Db,
     private stock: StockService,
     private branches: BranchService,
     private audit: AuditService,
-    private notify: NotifyService,
     private settings: SettingsService,
     private plans: PlanService,
     private clock: TimeService,
     private idem: IdempotencyService,
   ) {}
 
-  private include = {
-    customer: { select: { id: true, name: true, document: true, phone: true } },
-    operator: { select: { id: true, name: true } },
-    branch: { select: { id: true, name: true } },
-    items: { include: { product: { select: { id: true, name: true, sku: true } } } },
-    payments: true,
-  } as const;
-
-  // ---------- leitura ----------
-  @Get()
-  async list(
-    @CurrentUser() u: SessionUser,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
-    @Query('status') status?: string,
-    @Query('customerId') customerId?: string,
-    @Query('operatorId') operatorId?: string,
-    @Query('branchId') branchId?: string,
-    @Query('paymentMethodId') paymentMethodId?: string,
-    @Query('q') q?: string,
-    @Query('page') page?: string,
-    @Query('pageSize') pageSize?: string,
-  ) {
-    const { take, skip, ...rest } = paging(page, pageSize);
-    const term = q?.trim();
-    const where: any = {
-      companyId: u.companyId,
-      ...this.branches.scope(u, branchId),
-      ...(status ? { status: { in: status.split(',') } } : {}),
-      ...(customerId ? { customerId } : {}),
-      ...(operatorId ? { operatorId } : {}),
-      ...(paymentMethodId ? { payments: { some: { paymentMethodId } } } : {}),
-      ...(from || to ? { soldAt: { ...(from ? { gte: `${from} 00:00` } : {}), ...(to ? { lte: `${to} 23:59` } : {}) } } : {}),
-      ...(term ? {
-        OR: [
-          ...(Number(term) ? [{ number: Number(term) }] : []),
-          { customer: { name: { contains: term } } },
-          { items: { some: { name: { contains: term } } } },
-        ],
-      } : {}),
-    };
-    const [rows, total, sum] = await Promise.all([
-      this.db.sale.findMany({ where, orderBy: { soldAt: 'desc' }, take, skip, include: this.include }),
-      this.db.sale.count({ where }),
-      this.db.sale.aggregate({ where: { ...where, status: 'COMPLETED' }, _sum: { totalCents: true, costTotalCents: true } }),
-    ]);
-    return {
-      rows, total, ...rest,
-      summary: {
-        totalCents: sum._sum.totalCents ?? 0,
-        costCents: sum._sum.costTotalCents ?? 0,
-        profitCents: (sum._sum.totalCents ?? 0) - (sum._sum.costTotalCents ?? 0),
-      },
-    };
-  }
-
-  @Get(':id')
-  async detail(@CurrentUser() u: SessionUser, @Param('id') id: string) {
-    const sale = await this.db.sale.findFirst({
-      where: { id, companyId: u.companyId },
-      include: { ...this.include, session: { select: { id: true, openedAt: true } } },
-    });
-    if (!sale) throw new NotFoundException('Venda não encontrada.');
-    const company = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
-    const settings = await this.settings.of(u.companyId);
-    return {
-      sale,
-      // dados do comprovante não fiscal (briefing 45): a impressão é do cliente
-      receipt: {
-        company: {
-          name: company.tradeName || company.name, document: company.document,
-          address: [company.address, company.number, company.district, company.city, company.state]
-            .filter(Boolean).join(', '),
-          phone: company.phone,
-        },
-        footer: settings.receiptFooter,
-      },
-    };
-  }
-
-  // ---------- venda ----------
-  /**
-   * Finalização atômica: valida → grava venda → pagamentos → baixa estoque →
-   * registra caixa e financeiro. Qualquer falha desfaz tudo.
-   */
-  @Post() @Perms('pdv.acessar')
-  async create(@CurrentUser() u: SessionUser, @Body() dto: SaleDto, @Req() req: Request) {
-    await this.plans.assertActive(u.companyId);
+  async create(a: SaleActor, dto: SaleDto, ip?: string, soldAt?: string, ext?: ExtSaleInfo) {
+    await this.plans.assertActive(a.companyId);
     if (!dto.items?.length) throw new BadRequestException('A venda não tem itens.');
     if (!dto.payments?.length) throw new BadRequestException('Informe ao menos uma forma de pagamento.');
 
-    const branchId = await this.branches.require(u, dto.branchId);
-    const at = await this.clock.now(u.companyId);
-    const settings = await this.settings.of(u.companyId);
+    const branchId = await this.branches.require(a as unknown as SessionUser, dto.branchId);
+    const at = soldAt ?? await this.clock.now(a.companyId);
+    const settings = await this.settings.of(a.companyId);
 
     // ----- itens: preço e custo vêm do cadastro, nunca do que o front mandou -----
     const products = await this.db.product.findMany({
-      where: { companyId: u.companyId, deletedAt: null, id: { in: dto.items.map((i) => i.productId) } },
+      where: { companyId: a.companyId, deletedAt: null, id: { in: dto.items.map((i) => i.productId) } },
     });
     const byId = new Map(products.map((p) => [p.id, p]));
 
@@ -176,7 +124,7 @@ export class SalesController {
       // preço diferente do cadastro exige permissão de desconto
       let unitPrice = product.priceCents;
       if (i.unitPriceCents !== undefined && i.unitPriceCents !== product.priceCents) {
-        if (!can(u.role, 'pdv.desconto')) {
+        if (!can(a.role, 'pdv.desconto')) {
           throw new ForbiddenException(`Seu perfil não pode alterar o preço de "${product.name}".`);
         }
         unitPrice = i.unitPriceCents;
@@ -203,7 +151,7 @@ export class SalesController {
 
     // desconto acima do teto do operador exige permissão
     const pct = subtotal > 0 ? (discountTotal / subtotal) * 100 : 0;
-    if (pct > settings.maxDiscountPct && !can(u.role, 'pdv.desconto')) {
+    if (pct > settings.maxDiscountPct && !can(a.role, 'pdv.desconto')) {
       throw new ForbiddenException(
         `Desconto de ${pct.toFixed(1)}% acima do limite de ${settings.maxDiscountPct}% do seu perfil.`);
     }
@@ -212,7 +160,7 @@ export class SalesController {
     }
     if (dto.customerId) {
       const customer = await this.db.customer.findFirst({
-        where: { id: dto.customerId, companyId: u.companyId, deletedAt: null },
+        where: { id: dto.customerId, companyId: a.companyId, deletedAt: null },
       });
       if (!customer) throw new NotFoundException('Cliente não encontrado.');
     }
@@ -220,7 +168,7 @@ export class SalesController {
     // ----- pagamentos: soma tem que bater com o total -----
     const methods = await this.db.paymentMethod.findMany({
       where: {
-        companyId: u.companyId, deletedAt: null, active: true,
+        companyId: a.companyId, deletedAt: null, active: true,
         id: { in: dto.payments.map((p) => p.paymentMethodId) },
       },
     });
@@ -253,38 +201,42 @@ export class SalesController {
     if (receivedCash < cashDue) throw new BadRequestException('Valor recebido em dinheiro menor que o pagamento.');
     const change = receivedCash - cashDue;
 
-    // ----- caixa aberto -----
-    const session = await this.currentSession(u, branchId, dto.cashSessionId);
+    // ----- caixa aberto (vendedor externo não passa pelo caixa da loja) -----
+    const session = a.sellerId ? null : await this.currentSession(a, branchId, dto.cashSessionId);
 
-    const sale = await this.idem.run(u.companyId, 'sale', dto.idempotencyKey, () =>
+    // venda do app não paga (ou boleto ainda não compensado) vira conta a receber pendente
+    const { dueDate, ...extCols } = ext ?? {};
+    const receivable = !!ext && (!ext.paidInApp || ext.appPaymentMethod === 'boleto');
+
+    const sale = await this.idem.run(a.companyId, 'sale', dto.idempotencyKey, () =>
       this.db.$transaction(async (tx) => {
-        const last = await tx.sale.aggregate({ where: { companyId: u.companyId }, _max: { number: true } });
+        const last = await tx.sale.aggregate({ where: { companyId: a.companyId }, _max: { number: true } });
         // ponytail: número sequencial via max+1 dentro da transação — o SQLite
         // serializa escritas; no Postgres trocar por sequence por empresa.
         const number = (last._max.number ?? 0) + 1;
 
         const created = await tx.sale.create({
           data: {
-            companyId: u.companyId, branchId, cashSessionId: session?.id ?? null,
-            customerId: dto.customerId || null, operatorId: u.sub, number, status: 'COMPLETED',
+            companyId: a.companyId, branchId, cashSessionId: session?.id ?? null,
+            customerId: dto.customerId || null, operatorId: a.userId, sellerId: a.sellerId, number, status: 'COMPLETED',
             subtotalCents: subtotal, discountCents: discountTotal, totalCents: total,
             costTotalCents: items.reduce((s, i) => s + Math.round(i.unitCostCents * i.quantity), 0),
             receivedCents: receivedCash, changeCents: change,
-            notes: dto.notes || null, soldAt: at,
+            notes: dto.notes || null, soldAt: at, ...extCols,
             items: {
-              create: items.map(({ gross, ...i }) => ({ ...i, companyId: u.companyId })),
+              create: items.map(({ gross, ...i }) => ({ ...i, companyId: a.companyId })),
             },
-            payments: { create: payments.map((p) => ({ ...p, companyId: u.companyId })) },
+            payments: { create: payments.map((p) => ({ ...p, companyId: a.companyId })) },
           },
-          include: this.include,
+          include: SALE_INCLUDE,
         });
 
         if (settings.stockControl) {
           for (const item of items) {
             await this.stock.move(tx as Tx, {
-              companyId: u.companyId, branchId, productId: item.productId, type: 'VENDA',
+              companyId: a.companyId, branchId, productId: item.productId, type: 'VENDA',
               quantity: item.quantity, reason: `Venda #${number}`, refType: 'Sale', refId: created.id,
-              userId: u.sub, at, allowNegative: settings.allowNegativeStock,
+              userId: a.userId, at, allowNegative: settings.allowNegativeStock,
             });
           }
         }
@@ -293,38 +245,189 @@ export class SalesController {
           for (const p of payments) {
             await tx.cashMovement.create({
               data: {
-                companyId: u.companyId, sessionId: session.id, type: 'venda',
+                companyId: a.companyId, sessionId: session.id, type: 'venda',
                 amountCents: p.amountCents, paymentMethodId: p.paymentMethodId,
                 description: `Venda #${number} · ${p.methodName}`,
-                userId: u.sub, refType: 'Sale', refId: created.id, createdAtLocal: at,
+                userId: a.userId, refType: 'Sale', refId: created.id, createdAtLocal: at,
               },
             });
           }
         }
 
-        // financeiro: a venda vira receita recebida (caixa físico é outra coisa)
+        // financeiro: a venda vira receita — recebida, ou pendente se o app ainda vai receber
         const category = await tx.financialCategory.findFirst({
-          where: { companyId: u.companyId, type: 'RECEITA', name: 'Vendas', deletedAt: null },
+          where: { companyId: a.companyId, type: 'RECEITA', name: 'Vendas', deletedAt: null },
         });
         await tx.financeEntry.create({
           data: {
-            companyId: u.companyId, branchId, type: 'RECEITA',
+            companyId: a.companyId, branchId, type: 'RECEITA',
             description: `Venda #${number}`, amountCents: total,
-            dueDate: at.slice(0, 10), paidAt: at.slice(0, 10), status: 'paid',
+            dueDate: receivable ? dueDate ?? at.slice(0, 10) : at.slice(0, 10),
+            paidAt: receivable ? null : at.slice(0, 10), status: receivable ? 'pending' : 'paid',
             categoryId: category?.id ?? null, customerId: dto.customerId || null,
-            saleId: created.id, paymentMethodId: payments[0].paymentMethodId, createdById: u.sub,
+            saleId: created.id, paymentMethodId: payments[0].paymentMethodId, createdById: a.userId,
+            instrument: ext?.paidInApp ? ext.appPaymentMethod : null,
+            instrumentInfo: ext?.appPaymentMethod === 'boleto' && ext.appPaymentRef
+              ? JSON.stringify({ nossoNumero: ext.appPaymentRef }) : null,
           },
         });
         return created;
       }, TX));
 
-    await this.audit.log(u, 'create', 'Sale', sale.id,
-      { numero: sale.number, total, desconto: discountTotal, itens: items.length }, req.ip);
+    const who = { sub: a.userId ?? undefined, companyId: a.companyId };
+    await this.audit.log(who, 'create', 'Sale', sale.id,
+      { numero: sale.number, total, desconto: discountTotal, itens: items.length,
+        ...(a.sellerId ? { vendedorExterno: a.sellerId } : {}) }, ip);
     if (discountTotal > 0) {
-      await this.audit.log(u, 'discount', 'Sale', sale.id,
-        { numero: sale.number, desconto: discountTotal, percentual: Number(pct.toFixed(2)) }, req.ip);
+      await this.audit.log(who, 'discount', 'Sale', sale.id,
+        { numero: sale.number, desconto: discountTotal, percentual: Number(pct.toFixed(2)) }, ip);
     }
     return { ...sale, changeCents: change };
+  }
+
+  /** Sessão de caixa aberta do operador na filial (obrigatória para vender). */
+  private async currentSession(u: SaleActor, branchId: string, sessionId?: string) {
+    if (sessionId) {
+      const session = await this.db.cashSession.findFirst({
+        where: { id: sessionId, companyId: u.companyId, status: 'open' },
+      });
+      if (!session) throw new BadRequestException('Sessão de caixa fechada ou inexistente.');
+      return session;
+    }
+    const open = await this.db.cashSession.findFirst({
+      where: { companyId: u.companyId, branchId, status: 'open', operatorId: u.userId ?? undefined },
+      orderBy: { openedAt: 'desc' },
+    });
+    if (open) return open;
+    const any = await this.db.cashSession.findFirst({
+      where: { companyId: u.companyId, branchId, status: 'open' },
+      orderBy: { openedAt: 'desc' },
+    });
+    if (!any) throw new BadRequestException('Abra o caixa antes de vender.');
+    return any;
+  }
+}
+
+@Controller('api/sales')
+@Perms('venda.visualizar')
+export class SalesController {
+  constructor(
+    @Inject(PRISMA) private db: Db,
+    private sales: SalesService,
+    private stock: StockService,
+    private branches: BranchService,
+    private audit: AuditService,
+    private notify: NotifyService,
+    private settings: SettingsService,
+    private clock: TimeService,
+    private idem: IdempotencyService,
+  ) {}
+
+  // o ERP também vê o recebimento: venda com lançamento pendente = não paga
+  private include = {
+    ...SALE_INCLUDE,
+    finEntries: { where: { deletedAt: null }, select: { id: true, status: true, dueDate: true, paidAt: true } },
+  } as const;
+
+  /** "paid" | "unpaid" | "cancelled", vindo do lançamento financeiro da venda. */
+  private withPayment<T extends { status: string; finEntries: { status: string; dueDate: string }[] }>(sale: T) {
+    const pending = sale.finEntries.find((e) => e.status === 'pending');
+    return {
+      ...sale,
+      paymentStatus: sale.status === 'CANCELLED' ? 'cancelled' : pending ? 'unpaid' : 'paid',
+      dueDate: pending?.dueDate ?? null,
+    };
+  }
+
+  // ---------- leitura ----------
+  @Get()
+  async list(
+    @CurrentUser() u: SessionUser,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('status') status?: string,
+    @Query('customerId') customerId?: string,
+    @Query('operatorId') operatorId?: string,
+    @Query('sellerId') sellerId?: string,
+    @Query('branchId') branchId?: string,
+    @Query('paymentMethodId') paymentMethodId?: string,
+    @Query('paid') paid?: string, // 'yes' | 'no'
+    @Query('q') q?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    const { take, skip, ...rest } = paging(page, pageSize);
+    const term = q?.trim();
+    const where: any = {
+      companyId: u.companyId,
+      ...this.branches.scope(u, branchId),
+      ...(status ? { status: { in: status.split(',') } } : {}),
+      ...(customerId ? { customerId } : {}),
+      ...(operatorId ? { operatorId } : {}),
+      ...(sellerId ? { sellerId } : {}),
+      ...(paymentMethodId ? { payments: { some: { paymentMethodId } } } : {}),
+      ...(paid === 'no' ? { status: 'COMPLETED', finEntries: { some: UNPAID } } : {}),
+      ...(paid === 'yes' ? { status: 'COMPLETED', finEntries: { none: UNPAID } } : {}),
+      ...(from || to ? { soldAt: { ...(from ? { gte: `${from} 00:00` } : {}), ...(to ? { lte: `${to} 23:59` } : {}) } } : {}),
+      ...(term ? {
+        OR: [
+          ...(Number(term) ? [{ number: Number(term) }] : []),
+          { customer: { name: { contains: term } } },
+          { items: { some: { name: { contains: term } } } },
+        ],
+      } : {}),
+    };
+    const [rows, total, sum, unpaid] = await Promise.all([
+      this.db.sale.findMany({ where, orderBy: { soldAt: 'desc' }, take, skip, include: this.include }),
+      this.db.sale.count({ where }),
+      this.db.sale.aggregate({ where: { ...where, status: 'COMPLETED' }, _sum: { totalCents: true, costTotalCents: true } }),
+      this.db.sale.aggregate({
+        where: { ...where, status: 'COMPLETED', finEntries: { some: UNPAID } },
+        _sum: { totalCents: true }, _count: true,
+      }),
+    ]);
+    return {
+      rows: rows.map((r) => this.withPayment(r)), total, ...rest,
+      summary: {
+        unpaidCents: unpaid._sum.totalCents ?? 0,
+        unpaidCount: unpaid._count,
+        totalCents: sum._sum.totalCents ?? 0,
+        costCents: sum._sum.costTotalCents ?? 0,
+        profitCents: (sum._sum.totalCents ?? 0) - (sum._sum.costTotalCents ?? 0),
+      },
+    };
+  }
+
+  @Get(':id')
+  async detail(@CurrentUser() u: SessionUser, @Param('id') id: string) {
+    const sale = await this.db.sale.findFirst({
+      where: { id, companyId: u.companyId },
+      include: { ...this.include, session: { select: { id: true, openedAt: true } } },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada.');
+    const company = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
+    const settings = await this.settings.of(u.companyId);
+    return {
+      sale: this.withPayment(sale),
+      // dados do comprovante não fiscal (briefing 45): a impressão é do cliente
+      receipt: {
+        company: {
+          name: company.tradeName || company.name, document: company.document,
+          address: [company.address, company.number, company.district, company.city, company.state]
+            .filter(Boolean).join(', '),
+          phone: company.phone,
+        },
+        footer: settings.receiptFooter,
+      },
+    };
+  }
+
+  // ---------- venda ----------
+  @Post() @Perms('pdv.acessar')
+  create(@CurrentUser() u: SessionUser, @Body() dto: SaleDto, @Req() req: Request) {
+    return this.sales.create({
+      companyId: u.companyId, branchId: u.branchId, role: u.role, userId: u.sub, sellerId: null,
+    }, dto, req.ip);
   }
 
   /** Cancelamento nunca apaga: muda status, estorna estoque e registra tudo. */
@@ -397,33 +500,12 @@ export class SalesController {
       `#${sale.number} · ${fmtBRL(sale.totalCents)} · ${dto.reason}`, `/venda.html?id=${id}`);
     return cancelled;
   }
-
-  /** Sessão de caixa aberta do operador na filial (obrigatória para vender). */
-  private async currentSession(u: SessionUser, branchId: string, sessionId?: string) {
-    if (sessionId) {
-      const session = await this.db.cashSession.findFirst({
-        where: { id: sessionId, companyId: u.companyId, status: 'open' },
-      });
-      if (!session) throw new BadRequestException('Sessão de caixa fechada ou inexistente.');
-      return session;
-    }
-    const open = await this.db.cashSession.findFirst({
-      where: { companyId: u.companyId, branchId, status: 'open', operatorId: u.sub },
-      orderBy: { openedAt: 'desc' },
-    });
-    if (open) return open;
-    const any = await this.db.cashSession.findFirst({
-      where: { companyId: u.companyId, branchId, status: 'open' },
-      orderBy: { openedAt: 'desc' },
-    });
-    if (!any) throw new BadRequestException('Abra o caixa antes de vender.');
-    return any;
-  }
 }
 
 @Module({
   imports: [],
   controllers: [SalesController],
-  providers: [StockService],
+  providers: [StockService, SalesService],
+  exports: [SalesService],
 })
 export class SalesModule {}

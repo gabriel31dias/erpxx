@@ -249,8 +249,21 @@ export function chart(node, options) {
     return null;
   }
   node.replaceChildren();
-  const instance = new ApexCharts(node, options);
+  node.classList.add('lf-chart');
+  // largura sempre a do card: o Apex mede o pai uma vez só e, se o menu lateral
+  // abre/fecha ou a tela muda, o SVG ficava maior que o card e vazava
+  const instance = new ApexCharts(node, { ...options, chart: { width: '100%', redrawOnParentResize: true, ...options.chart } });
   instance.render();
+  if (window.ResizeObserver) {
+    let largura = node.clientWidth;
+    let timer;
+    new ResizeObserver(() => {
+      if (!node.isConnected || node.clientWidth === largura) return;
+      largura = node.clientWidth;
+      clearTimeout(timer);
+      timer = setTimeout(() => instance.updateOptions({ chart: { width: '100%' } }, false, false), 120);
+    }).observe(node);
+  }
   return instance;
 }
 

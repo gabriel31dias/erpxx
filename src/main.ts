@@ -15,6 +15,8 @@ async function bootstrap() {
     : undefined;
 
   const app = await NestFactory.create(AppModule, { bodyParser: true, httpsOptions });
+  // atrás do nginx: req.ip vem do X-Forwarded-For (throttle e auditoria por cliente, não por proxy)
+  app.getHttpAdapter().getInstance().set('trust proxy', 'loopback');
   app.use(cookieParser());
   // planilha de importação chega como texto no corpo
   const express = require('express');
@@ -28,6 +30,15 @@ async function bootstrap() {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+    // app do vendedor externo roda em outra origem. Só /api/ext: lá a sessão é
+    // token Bearer (sem cookie), então liberar qualquer origem não abre CSRF.
+    if (req.path.startsWith('/api/ext/')) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+      res.setHeader('Access-Control-Max-Age', '86400');
+      if (req.method === 'OPTIONS') return void res.status(204).end();
+    }
     next();
   });
 
