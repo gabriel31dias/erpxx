@@ -457,7 +457,14 @@ model Customer {
   whatsapp  String?
   email     String?
   birthdate String? // "YYYY-MM-DD"
-  address   String?
+  address   String? // endereço em uma linha (montado dos campos abaixo quando preenchidos)
+  zip        String? // CEP, só dígitos
+  street     String?
+  number     String?
+  complement String?
+  district   String? // bairro
+  city       String?
+  state      String? // UF
   notes     String?
   active    Boolean   @default(true)
   priceListId String? // tabela de preço do cliente; sem tabela = preço do cadastro
@@ -470,7 +477,7 @@ model Customer {
   // ---- Localização (roteiros e check-in de visitas) ----
   lat       Float?
   lng       Float?
-  geoSource String? // manual | geocoder | checkin
+  geoSource String? // manual | geocoder (número exato) | approx (trecho da rua ou centro do CEP) | checkin
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt

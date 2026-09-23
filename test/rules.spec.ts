@@ -11,6 +11,9 @@ process.env.PLAN_PRO_LIMITS = '10,2,3,5000';
 process.env.PLAN_PRO_FEATURES = 'relatorios.basico,export,importacao,crediario';
 // gateway PIX falso (sobe no main) — nunca chama a Blue de verdade
 process.env.PIX_API_BASE = 'http://127.0.0.1:47811';
+// ViaCEP e Nominatim falsos no mesmo servidor
+process.env.VIACEP_URL = 'http://127.0.0.1:47811';
+process.env.GEOCODER_URL = 'http://127.0.0.1:47811';
 process.env.UPLOADS_DIR = require('path').join(__dirname, '..', 'data', 'test-uploads');
 
 import * as assert from 'assert';
@@ -67,6 +70,33 @@ async function main() {
   const pixMock = { paid: false, charges: 0 };
   const gateway = createServer((req, res) => {
     res.setHeader('Content-Type', 'application/json');
+    const url = new URL(req.url!, 'http://x');
+    if (url.pathname.startsWith('/ws/')) {
+      const cep = url.pathname.split('/')[2];
+      return res.end(JSON.stringify(cep === '01305000'
+        ? { cep: '01305-000', logradouro: 'Rua Augusta', bairro: 'Consolação', localidade: 'São Paulo', uf: 'SP' }
+        : { erro: true }));
+    }
+    if (url.pathname === '/search') {
+      const p = Object.fromEntries(url.searchParams);
+      const hit = (lat: number, lon: number, address: any) => ({ lat: String(lat), lon: String(lon), display_name: 'x', address });
+      if (p.street === '500 Rua Augusta' && p.city === 'São Paulo') { // como o OSM real: homônima em Sumaré primeiro
+        return res.end(JSON.stringify([
+          hit(-22.85, -47.18, { city: 'Sumaré', postcode: '13181-670', house_number: '500' }),
+          hit(-23.553, -46.652, { city: 'São Paulo', postcode: '01305-000', house_number: '500' }),
+        ]));
+      }
+      if (p.street?.includes('Rua das Flores')) { // homônima em outra cidade: tem que ser descartada
+        return res.end(JSON.stringify([hit(-25.43, -49.27, { city: 'Curitiba', postcode: '80020-901' })]));
+      }
+      if (p.q === '13010-000') { // CEP em texto livre: lixo de outra cidade antes do certo
+        return res.end(JSON.stringify([
+          hit(-15.61, -56.15, { city: 'Várzea Grande', postcode: '78110-000' }),
+          hit(-22.905, -47.061, { city: 'Campinas', postcode: '13010-000' }),
+        ]));
+      }
+      return res.end('[]');
+    }
     if (req.method === 'POST' && req.url === '/transactions') {
       pixMock.charges++;
       return res.end(JSON.stringify({ id: 'tx_teste', status: 'waiting_payment',
@@ -1073,6 +1103,48 @@ async function main() {
     const passado = await api('GET', `/api/field/live?date=${ontem}`);
     const stops = passado.data.sellers.find((x: any) => x.id === vendedor.data.id).stops;
     assert.deepEqual(stops.map((x: any) => x.status), ['MISSED']);
+  });
+
+  await check('CEP preenche o endereço; CEP inexistente e inválido são avisados', async () => {
+    const r = await caixa('GET', '/api/cep/01305-000');
+    assert.equal(r.status, 200);
+    assert.deepEqual([r.data.street, r.data.district, r.data.city, r.data.state], ['Rua Augusta', 'Consolação', 'São Paulo', 'SP']);
+    assert.equal((await caixa('GET', '/api/cep/99999999')).status, 404);
+    assert.equal((await caixa('GET', '/api/cep/123')).status, 400);
+  });
+
+  const augusta = { zip: '01305-000', street: 'Rua Augusta', number: '500', complement: 'Sala 2', district: 'Consolação', city: 'São Paulo', state: 'sp' };
+  const lojaAugusta = await api('POST', '/api/customers', { name: 'Loja Augusta', ...augusta });
+  await check('cliente com endereço completo já nasce no mapa (número exato)', async () => {
+    assert.equal(lojaAugusta.status, 201, JSON.stringify(lojaAugusta.data));
+    assert.equal(lojaAugusta.data.address, 'Rua Augusta, 500 - Sala 2, Consolação, São Paulo - SP, 01305-000');
+    assert.equal(lojaAugusta.data.state, 'SP');
+    assert.deepEqual([lojaAugusta.data.lat, lojaAugusta.data.lng, lojaAugusta.data.geoSource], [-23.553, -46.652, 'geocoder']);
+  });
+
+  await check('pino ajustado à mão fica; mudar o endereço busca de novo', async () => {
+    await api('PATCH', `/api/customers/${lojaAugusta.data.id}/geo`, { lat: -23.5531, lng: -46.6522 });
+    const mesma = await api('PATCH', `/api/customers/${lojaAugusta.data.id}`, { name: 'Loja Augusta', ...augusta, notes: 'Entregar pelos fundos' });
+    assert.deepEqual([mesma.data.lat, mesma.data.geoSource], [-23.5531, 'manual']);
+    const mudou = await api('PATCH', `/api/customers/${lojaAugusta.data.id}`, { name: 'Loja Augusta', ...augusta, number: '9999' });
+    assert.equal(mudou.data.lat, null); // endereço novo não achado: sem pino em vez de pino velho
+    const voltou = await api('PATCH', `/api/customers/${lojaAugusta.data.id}`, { name: 'Loja Augusta', ...augusta });
+    assert.equal(voltou.data.geoSource, 'geocoder');
+  });
+
+  const campinas = await api('POST', '/api/customers', {
+    name: 'Floricultura', zip: '13010-000', street: 'Rua das Flores', number: '123', city: 'Campinas', state: 'SP',
+  });
+  await check('resultado de outra cidade é descartado; fica o centro do CEP (aproximado)', async () => {
+    assert.deepEqual([campinas.data.lat, campinas.data.geoSource], [-22.905, 'approx']);
+  });
+
+  await check('local aproximado não gera alerta e o primeiro check-in preciso vira o local', async () => {
+    const r = await ext('POST', '/api/ext/visits/checkin', { customerId: campinas.data.id, lat: -22.91, lng: -47.07, accuracy: 15 });
+    assert.equal(r.data.outOfRange, false);
+    assert.ok(r.data.distanceM > 500);
+    const c = await db.customer.findUniqueOrThrow({ where: { id: campinas.data.id } });
+    assert.deepEqual([c.lat, c.geoSource], [-22.91, 'checkin']);
   });
 
   await check('mapa de campo de uma empresa não mostra outra', async () => {

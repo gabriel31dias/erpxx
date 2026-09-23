@@ -17,6 +17,7 @@ export default async function render({ content, can }) {
   const tabelas = (await get('/price-lists').catch(() => ({ rows: [] }))).rows
     .filter((t) => t.active || t.id === c.priceListId);
 
+  let local = null; // bloco do mapa (criado mais abaixo; o salvar atualiza o pino)
   const f = {
     name: input({ value: c.name ?? '', required: true }),
     document: input({ value: c.document ?? '' }),
@@ -24,7 +25,13 @@ export default async function render({ content, can }) {
     whatsapp: input({ value: c.whatsapp ?? '', type: 'tel' }),
     email: input({ value: c.email ?? '', type: 'email' }),
     birthdate: input({ value: c.birthdate ?? '', type: 'date' }),
-    address: input({ value: c.address ?? '' }),
+    zip: input({ value: c.zip ? `${c.zip.slice(0, 5)}-${c.zip.slice(5)}` : '', inputmode: 'numeric', placeholder: '00000-000', maxlength: 9 }),
+    street: input({ value: c.street ?? '' }),
+    number: input({ value: c.number ?? '' }),
+    complement: input({ value: c.complement ?? '' }),
+    district: input({ value: c.district ?? '' }),
+    city: input({ value: c.city ?? '' }),
+    state: input({ value: c.state ?? '', maxlength: 2, style: 'text-transform:uppercase' }),
     notes: textarea({ value: c.notes ?? '' }),
     active: select([
       { value: 'true', label: 'Ativo', selected: c.active !== false },
@@ -34,6 +41,23 @@ export default async function render({ content, can }) {
       { value: '', label: 'Preço do cadastro', selected: !c.priceListId },
       ...tabelas.map((t) => ({ value: t.id, label: t.name, selected: t.id === c.priceListId })),
     ], { disabled: !podeTabela }),
+  };
+
+  // CEP completo → rua, bairro, cidade e UF; o foco vai para o número
+  let cepConsultado = (c.zip || '');
+  f.zip.oninput = async () => {
+    const d = f.zip.value.replace(/\D/g, '').slice(0, 8);
+    f.zip.value = d.length > 5 ? `${d.slice(0, 5)}-${d.slice(5)}` : d;
+    if (d.length !== 8 || d === cepConsultado) return;
+    cepConsultado = d;
+    try {
+      const r = await get(`/cep/${d}`);
+      f.street.value = r.street || f.street.value;
+      f.district.value = r.district || f.district.value;
+      f.city.value = r.city;
+      f.state.value = r.state;
+      (r.street ? f.number : f.street).focus();
+    } catch (err) { toast(err.message, 'warning'); }
   };
 
   const salvar = h('button', { class: 'btn btn-primary', type: 'submit' }, id ? 'Salvar' : 'Cadastrar cliente');
@@ -50,7 +74,16 @@ export default async function render({ content, can }) {
       help: podeTabela ? 'Preço que o cliente paga no PDV e no app dos vendedores.'
         : 'Só gerente ou proprietário altera a tabela do cliente.',
     }),
-    field('Endereço', f.address, { col: 'col-12' }),
+    field('CEP', f.zip, { col: 'col-6 col-md-2', help: 'Preenche o endereço sozinho.' }),
+    field('Rua', f.street, { col: 'col-12 col-md-5' }),
+    field('Número', f.number, { col: 'col-6 col-md-2' }),
+    field('Complemento', f.complement, { col: 'col-6 col-md-3' }),
+    field('Bairro', f.district, { col: 'col-12 col-md-4' }),
+    field('Cidade', f.city, { col: 'col-8 col-md-5' }),
+    field('UF', f.state, { col: 'col-4 col-md-3' }),
+    // cadastro antigo com endereço em texto livre: mostra para a pessoa migrar
+    c.address && !c.zip && !c.street ? h('div', { class: 'col-12 f-12 txt-secondary' },
+      `Endereço anterior: ${c.address}. Preencha o CEP para o mapa achar o cliente.`) : null,
     field('Observações', f.notes, { col: 'col-12' }),
     h('div', { class: 'col-12 d-flex gap-2 justify-content-end' },
       h('a', { class: 'btn btn-light', href: '/clientes.html' }, 'Voltar'),
@@ -67,14 +100,27 @@ export default async function render({ content, can }) {
         whatsapp: f.whatsapp.value.trim() || undefined,
         email: f.email.value.trim() || undefined,
         birthdate: f.birthdate.value || undefined,
-        address: f.address.value.trim() || undefined,
+        zip: f.zip.value.trim() || undefined,
+        street: f.street.value.trim() || undefined,
+        number: f.number.value.trim() || undefined,
+        complement: f.complement.value.trim() || undefined,
+        district: f.district.value.trim() || undefined,
+        city: f.city.value.trim() || undefined,
+        state: f.state.value.trim().toUpperCase() || undefined,
+        // sem os campos novos, preserva o endereço antigo em texto livre
+        address: !f.zip.value.trim() && !f.street.value.trim() && !f.city.value.trim() ? c.address || undefined : undefined,
         notes: f.notes.value.trim() || undefined,
         active: f.active.value === 'true',
         ...(podeTabela ? { priceListId: f.priceList.value || null } : {}),
       };
       const saved = id ? await patch(`/customers/${id}`, body) : await post('/customers', body);
-      toast('Cliente salvo.');
-      if (!id) location.href = `/cliente.html?id=${saved.id}`;
+      if (!id) { location.href = `/cliente.html?id=${saved.id}`; return; }
+      Object.assign(c, saved);
+      local?.atualizar();
+      const achou = saved.lat != null;
+      toast(!achou && (body.zip || body.street) ? 'Cliente salvo. Endereço não achado no mapa: marque o local no bloco Localização.'
+        : saved.geoSource === 'approx' ? 'Cliente salvo. No mapa de forma aproximada (rua/CEP) — ajuste o pino se quiser.'
+        : 'Cliente salvo.', !achou && (body.zip || body.street) ? 'warning' : 'success');
     } catch (err) {
       toast(err.message, 'error');
     } finally {
@@ -103,7 +149,7 @@ export default async function render({ content, can }) {
     : h('p', { class: 'txt-secondary mb-0' }, 'Este cliente ainda não comprou.')) : null;
 
   const credito = id ? await blocoCredito(id, can('credito.gerenciar')) : null;
-  const local = id && window.L ? blocoLocal(c, editavel) : null;
+  local = id && window.L ? blocoLocal(c, editavel) : null;
 
   mount(content,
     pageTitle(id ? c.name : 'Novo cliente'),
@@ -120,12 +166,15 @@ export default async function render({ content, can }) {
 function blocoLocal(c, editavel) {
   const mapaEl = h('div', { class: 'lf-map', style: 'height:280px' });
   const info = h('small', { class: 'txt-secondary' });
-  const ORIGEM = { manual: 'marcado no mapa', geocoder: 'encontrado pelo endereço', checkin: 'do primeiro check-in do vendedor' };
+  const ORIGEM = {
+    manual: 'marcado no mapa', geocoder: 'encontrado pelo endereço', approx: 'aproximado (trecho da rua ou CEP) — o 1º check-in do vendedor refina',
+    checkin: 'do primeiro check-in do vendedor',
+  };
   const legenda = () => {
     info.textContent = c.lat == null ? 'Sem localização. Busque pelo endereço ou clique no mapa para marcar.'
       : `${c.lat.toFixed(5)}, ${c.lng.toFixed(5)} · ${ORIGEM[c.geoSource] ?? ''}`;
   };
-  const buscar = editavel && c.address ? h('button', { class: 'btn btn-sm btn-outline-primary', type: 'button' }, 'Buscar pelo endereço') : null;
+  const buscar = editavel ? h('button', { class: 'btn btn-sm btn-outline-primary', type: 'button' }, 'Buscar pelo endereço') : null;
   let map;
   let pino;
   const posicionar = (lat, lng, zoom) => {
@@ -156,6 +205,13 @@ function blocoLocal(c, editavel) {
   }
   return {
     el: card('Localização', h('div', {}, mapaEl, h('div', { class: 'mt-2' }, info)), buscar),
+    /** Depois de salvar o cadastro: o servidor pode ter achado (ou limpado) o local. */
+    atualizar() {
+      if (!map) return;
+      if (c.lat != null) posicionar(c.lat, c.lng, 16);
+      else if (pino) { pino.remove(); pino = null; }
+      legenda();
+    },
     iniciar() {
       map = criarMapa(mapaEl);
       if (c.lat != null) posicionar(c.lat, c.lng, 16);

@@ -9,6 +9,7 @@ import { CurrentUser, Perms, SessionUser } from '../common/auth.guard';
 import { AuditService } from '../common/core';
 import { DATE_RE, paging } from '../common/util';
 import { can } from '../common/rbac';
+import { FieldModule, GeoService } from './field';
 
 const PRICE_LIST = { priceList: { select: { id: true, name: true, active: true } } } as const;
 
@@ -19,7 +20,15 @@ class CustomerDto {
   @IsOptional() @IsString() whatsapp?: string;
   @IsOptional() @IsEmail({}, { message: 'E-mail inválido.' }) email?: string;
   @IsOptional() @Matches(DATE_RE, { message: 'Data de nascimento inválida.' }) birthdate?: string;
+  /** Endereço em texto livre (cadastros antigos). Com os campos abaixo, é montado a partir deles. */
   @IsOptional() @IsString() address?: string;
+  @IsOptional() @Matches(/^\d{5}-?\d{3}$/, { message: 'CEP inválido.' }) zip?: string;
+  @IsOptional() @IsString() street?: string;
+  @IsOptional() @IsString() number?: string;
+  @IsOptional() @IsString() complement?: string;
+  @IsOptional() @IsString() district?: string;
+  @IsOptional() @IsString() city?: string;
+  @IsOptional() @Matches(/^[A-Za-z]{2}$/, { message: 'UF deve ter 2 letras.' }) state?: string;
   @IsOptional() @IsString() notes?: string;
   @IsOptional() @IsBoolean() active?: boolean;
   /** Tabela de preço. Ausente = não mexe; null = volta ao preço do cadastro. */
@@ -41,7 +50,7 @@ class SupplierDto {
 @Controller('api/customers')
 @Perms('cliente.visualizar')
 export class CustomersController {
-  constructor(@Inject(PRISMA) private db: Db, private audit: AuditService) {}
+  constructor(@Inject(PRISMA) private db: Db, private audit: AuditService, private geo: GeoService) {}
 
   @Get()
   async list(
@@ -118,7 +127,7 @@ export class CustomersController {
     });
     await this.audit.log(u, 'create', 'Customer', customer.id,
       { nome: customer.name, ...(customer.priceListId ? { tabelaPreco: customer.priceListId } : {}) }, req.ip);
-    return customer;
+    return this.autoLocate(customer, null);
   }
 
   @Patch(':id') @Perms('cliente.gerenciar')
@@ -130,7 +139,29 @@ export class CustomersController {
       where: { id }, data: { ...this.data(dto), ...(priceListId !== undefined ? { priceListId } : {}) },
     });
     await this.audit.log(u, 'update', 'Customer', id, AuditService.diff(before, customer), req.ip);
-    return customer;
+    return this.autoLocate(customer, before);
+  }
+
+  /**
+   * Localização automática pelo endereço: cliente novo, sem pino ou que mudou de
+   * endereço. Pino ajustado à mão fica enquanto o endereço não muda. Falha no
+   * serviço de mapas não impede salvar o cadastro.
+   */
+  private async autoLocate<T extends Record<string, any>>(c: T, before: Record<string, any> | null): Promise<T> {
+    const mudou = !before || ADDRESS_KEYS.some((k) => (before[k] ?? null) !== (c[k] ?? null));
+    const temEndereco = !!(c.zip || (c.street && c.city) || c.address);
+    if (!temEndereco || (!mudou && c.lat != null)) return c;
+    try {
+      const hit = await this.geo.locate(c);
+      const data = hit ? { lat: hit.lat, lng: hit.lng, geoSource: hit.source }
+        : mudou ? { lat: null, lng: null, geoSource: null } // endereço novo não achado: o pino antigo estaria errado
+        : null;
+      if (!data) return c;
+      await this.db.customer.update({ where: { id: c.id }, data });
+      return { ...c, ...data };
+    } catch {
+      return c; // serviço de mapas fora: fica para o botão "Buscar pelo endereço" ou o check-in
+    }
   }
 
   /**
@@ -169,11 +200,36 @@ export class CustomersController {
       whatsapp: dto.whatsapp || dto.phone || null,
       email: dto.email?.toLowerCase() || null,
       birthdate: dto.birthdate || null,
-      address: dto.address || null,
+      ...addressOf(dto),
       notes: dto.notes || null,
       active: dto.active ?? true,
     };
   }
+}
+
+const ADDRESS_KEYS = ['address', 'zip', 'street', 'number', 'city', 'state'] as const;
+
+/**
+ * Campos de endereço do cliente. Com CEP/rua/cidade, a linha `address` é montada
+ * ("Rua Augusta, 500 - sala 2, Consolação, São Paulo - SP, 01305-000") para as
+ * telas e o app que só leem uma linha; sem eles, vale o texto livre enviado.
+ */
+function addressOf(dto: CustomerDto) {
+  const t = (v?: string) => v?.trim() || null;
+  const parts = {
+    zip: dto.zip ? dto.zip.replace(/\D/g, '') : null, street: t(dto.street), number: t(dto.number),
+    complement: t(dto.complement), district: t(dto.district), city: t(dto.city), state: dto.state?.trim().toUpperCase() || null,
+  };
+  const estruturado = parts.zip || parts.street || parts.city;
+  if (!estruturado) return { ...parts, address: t(dto.address) };
+  const rua = [parts.street, parts.number].filter(Boolean).join(', ');
+  const linha = [
+    parts.complement ? `${rua} - ${parts.complement}` : rua,
+    parts.district,
+    [parts.city, parts.state].filter(Boolean).join(' - '),
+    parts.zip ? `${parts.zip.slice(0, 5)}-${parts.zip.slice(5)}` : null,
+  ].filter(Boolean).join(', ');
+  return { ...parts, address: linha };
 }
 
 @Controller('api/suppliers')
@@ -277,5 +333,5 @@ export class SuppliersController {
   }
 }
 
-@Module({ controllers: [CustomersController, SuppliersController] })
+@Module({ imports: [FieldModule], controllers: [CustomersController, SuppliersController] })
 export class CrmModule {}

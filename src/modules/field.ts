@@ -138,7 +138,7 @@ export class FieldService {
   async checkIn(companyId: string, sellerId: string, dto: CheckInDto) {
     const customer = await this.db.customer.findFirst({
       where: { id: dto.customerId, companyId, deletedAt: null },
-      select: { id: true, name: true, lat: true, lng: true },
+      select: { id: true, name: true, lat: true, lng: true, geoSource: true },
     });
     if (!customer) throw new NotFoundException('Cliente não encontrado.');
     const at = await this.when(companyId, dto.at);
@@ -151,12 +151,14 @@ export class FieldService {
 
     const settings = await this.settings.of(companyId);
     const hasGeo = customer.lat !== null && customer.lng !== null;
+    // local aproximado (trecho da rua/CEP): distância só informativa, sem alerta de "fora do local"
     const dist = hasGeo ? distanceM(dto.lat, dto.lng, customer.lat!, customer.lng!) : null;
+    const confiavel = hasGeo && customer.geoSource !== 'approx';
     const routeId = await this.plannedRoute(companyId, sellerId, customer.id, date);
     const data = {
       status: 'IN_PROGRESS', routeId, checkInAt: at, checkInLat: dto.lat, checkInLng: dto.lng,
       accuracyM: dto.accuracy ?? null, distanceM: dist,
-      outOfRange: dist !== null && dist > settings.visitRadiusM, mockLocation: !!dto.mock,
+      outOfRange: confiavel && dist! > settings.visitRadiusM, mockLocation: !!dto.mock,
       checkOutAt: null, outcome: null, reason: null,
     };
     let visit;
@@ -172,7 +174,8 @@ export class FieldService {
       }));
     }
 
-    if (!hasGeo && !dto.mock && (dto.accuracy ?? Infinity) <= settings.visitRadiusM) {
+    // cliente sem mapa, ou com local aproximado: o primeiro check-in preciso vira o local dele
+    if ((!hasGeo || customer.geoSource === 'approx') && !dto.mock && (dto.accuracy ?? Infinity) <= settings.visitRadiusM) {
       await this.db.customer.update({ where: { id: customer.id }, data: { lat: dto.lat, lng: dto.lng, geoSource: 'checkin' } });
     }
     await this.touch(companyId, sellerId, dto.lat, dto.lng, dto.accuracy);
@@ -473,12 +476,130 @@ export class FieldController {
   }
 }
 
-/** Coordenada do cliente: ajuste manual do pino ou busca pelo endereço (Nominatim/OpenStreetMap). */
+const UF_NOME: Record<string, string> = {
+  AC: 'Acre', AL: 'Alagoas', AP: 'Amapá', AM: 'Amazonas', BA: 'Bahia', CE: 'Ceará', DF: 'Distrito Federal',
+  ES: 'Espírito Santo', GO: 'Goiás', MA: 'Maranhão', MT: 'Mato Grosso', MS: 'Mato Grosso do Sul', MG: 'Minas Gerais',
+  PA: 'Pará', PB: 'Paraíba', PR: 'Paraná', PE: 'Pernambuco', PI: 'Piauí', RJ: 'Rio de Janeiro', RN: 'Rio Grande do Norte',
+  RS: 'Rio Grande do Sul', RO: 'Rondônia', RR: 'Roraima', SC: 'Santa Catarina', SP: 'São Paulo', SE: 'Sergipe', TO: 'Tocantins',
+};
+/** "São Paulo" ≈ "sao paulo" ≈ "SÃO PAULO". */
+const norm = (s?: string | null) => (s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+const digits = (s?: string | null) => (s ?? '').replace(/\D+/g, '');
+
+export interface AddressParts {
+  address?: string | null; zip?: string | null; street?: string | null; number?: string | null;
+  district?: string | null; city?: string | null; state?: string | null;
+}
+
+type Hit = { lat: string; lon: string; display_name: string; address?: Record<string, string> };
+
+/**
+ * CEP (ViaCEP) e coordenada do endereço (Nominatim/OpenStreetMap).
+ * ponytail: Nominatim público pede no máximo 1 consulta/s e identificação; a trava
+ * aqui é por processo. Muitas empresas geocodificando juntas → provedor com chave.
+ */
+@Injectable()
+export class GeoService {
+  private lastCall = 0;
+  private log = new Logger('Geo');
+
+  /** Endereço do CEP. null = CEP inexistente. */
+  async cep(zip: string) {
+    const cep = digits(zip);
+    if (cep.length !== 8) throw new BadRequestException('CEP deve ter 8 dígitos.');
+    const base = process.env.VIACEP_URL || 'https://viacep.com.br';
+    let r: Record<string, string>;
+    try {
+      const res = await fetch(`${base}/ws/${cep}/json/`, { signal: AbortSignal.timeout(6000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      r = await res.json() as Record<string, string>;
+    } catch (e) {
+      this.log.warn(`ViaCEP: ${(e as Error).message}`);
+      throw new BadRequestException('Consulta de CEP indisponível agora. Preencha o endereço à mão.');
+    }
+    if (r.erro) return null;
+    return { zip: cep, street: r.logradouro || '', district: r.bairro || '', city: r.localidade || '', state: r.uf || '' };
+  }
+
+  /**
+   * Coordenada do endereço, conferida contra a cidade/CEP do cliente (resultado de
+   * outra cidade é descartado: melhor sem pino do que pino errado).
+   * `geocoder` = achou o número; `approx` = trecho da rua ou centro do CEP —
+   * no OpenStreetMap brasileiro número de casa é raro, então aproximado é o comum.
+   */
+  async locate(a: AddressParts): Promise<{ lat: number; lng: number; source: 'geocoder' | 'approx'; label: string } | null> {
+    const zip = digits(a.zip);
+    const cep = zip.length === 8 ? `${zip.slice(0, 5)}-${zip.slice(5)}` : null;
+    const confere = (h: Hit) => {
+      const ad = h.address ?? {};
+      const cidades = [ad.city, ad.town, ad.village, ad.municipality, ad.city_district].map(norm).filter(Boolean);
+      if (a.city && cidades.includes(norm(a.city))) return true;
+      return !!zip && digits(ad.postcode).slice(0, 5) === zip.slice(0, 5);
+    };
+    const tentativas: Array<Record<string, string>> = [];
+    if (a.street && a.city) {
+      tentativas.push({ street: [a.number, a.street].filter(Boolean).join(' '), city: a.city, ...(cep ? { postalcode: cep } : {}) });
+    }
+    if (cep) tentativas.push({ q: cep });
+
+    for (const params of tentativas) {
+      // entre os da cidade certa: com número da casa, depois o do mesmo CEP
+      const nota = (h: Hit) => (h.address?.house_number ? 2 : 0)
+        + (zip && digits(h.address?.postcode).slice(0, 5) === zip.slice(0, 5) ? 1 : 0);
+      const hit = (await this.search(params)).filter(confere).sort((x, y) => nota(y) - nota(x))[0];
+      if (hit) {
+        return {
+          lat: Number(hit.lat), lng: Number(hit.lon), label: hit.display_name,
+          source: hit.address?.house_number ? 'geocoder' : 'approx',
+        };
+      }
+    }
+    // cadastro antigo, só texto livre: sem cidade para conferir, fica como aproximado
+    if (!tentativas.length && a.address?.trim()) {
+      const hit = (await this.search({ q: a.address }))[0];
+      if (hit) return { lat: Number(hit.lat), lng: Number(hit.lon), label: hit.display_name, source: 'approx' };
+    }
+    return null;
+  }
+
+  private async search(params: Record<string, string>): Promise<Hit[]> {
+    const wait = this.lastCall + 1100 - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    this.lastCall = Date.now();
+    const base = process.env.GEOCODER_URL || 'https://nominatim.openstreetmap.org';
+    const qs = new URLSearchParams({ format: 'json', addressdetails: '1', limit: '3', countrycodes: 'br', ...params });
+    try {
+      const res = await fetch(`${base}/search?${qs}`, {
+        headers: { 'User-Agent': `LojaFlow/1.0 (${process.env.APP_URL || 'lojaflow'})`, 'Accept-Language': 'pt-BR' },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json() as Hit[];
+    } catch (e) {
+      this.log.warn(`Nominatim: ${(e as Error).message}`);
+      throw new BadRequestException('Serviço de mapas indisponível agora. Marque o local no mapa.');
+    }
+  }
+}
+
+/** Consulta de CEP para os formulários (cliente, empresa, fornecedor). */
+@Controller('api/cep')
+export class CepController {
+  constructor(private geo: GeoService) {}
+
+  @Get(':cep')
+  async get(@Param('cep') cep: string) {
+    const r = await this.geo.cep(cep);
+    if (!r) throw new NotFoundException('CEP não encontrado.');
+    return r;
+  }
+}
+
+/** Coordenada do cliente: ajuste manual do pino ou busca pelo endereço. */
 @Controller('api/customers/:id/geo')
 @Perms('cliente.gerenciar')
 export class CustomerGeoController {
-  private lastCall = 0;
-  constructor(@Inject(PRISMA) private db: Db, private audit: AuditService) {}
+  constructor(@Inject(PRISMA) private db: Db, private audit: AuditService, private geo: GeoService) {}
 
   @Patch()
   async set(@CurrentUser() u: SessionUser, @Param('id') id: string, @Body() dto: GeoDto, @Req() req: Request) {
@@ -488,38 +609,16 @@ export class CustomerGeoController {
     return { lat: c.lat, lng: c.lng, geoSource: c.geoSource };
   }
 
-  /**
-   * Procura o endereço do cliente. ponytail: Nominatim público pede no máximo
-   * 1 consulta/s e identificação; a trava aqui é por processo. Muitas empresas
-   * geocodificando juntas → trocar por provedor com chave.
-   */
+  /** Busca pelo endereço cadastrado (sobrescreve inclusive pino manual: foi pedido). */
   @Post('lookup')
   async lookup(@CurrentUser() u: SessionUser, @Param('id') id: string, @Req() req: Request) {
     const customer = await this.find(u.companyId, id);
-    if (!customer.address?.trim()) throw new BadRequestException('Cliente sem endereço cadastrado.');
-    const wait = this.lastCall + 1100 - Date.now();
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    this.lastCall = Date.now();
-    const base = process.env.GEOCODER_URL || 'https://nominatim.openstreetmap.org';
-    const url = `${base}/search?format=json&limit=1&countrycodes=br&q=${encodeURIComponent(customer.address)}`;
-    let hits: Array<{ lat: string; lon: string; display_name: string }>;
-    try {
-      const res = await fetch(url, {
-        headers: { 'User-Agent': `LojaFlow/1.0 (${process.env.APP_URL || 'lojaflow'})`, 'Accept-Language': 'pt-BR' },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      hits = await res.json() as typeof hits;
-    } catch (e) {
-      new Logger('Geocoder').warn(`falha ao buscar endereço: ${(e as Error).message}`);
-      throw new BadRequestException('Serviço de mapas indisponível agora. Marque o local no mapa.');
-    }
-    if (!hits.length) throw new BadRequestException('Endereço não encontrado no mapa. Marque o local manualmente.');
-    const lat = Number(hits[0].lat);
-    const lng = Number(hits[0].lon);
-    await this.db.customer.update({ where: { id }, data: { lat, lng, geoSource: 'geocoder' } });
-    await this.audit.log(u, 'update', 'Customer', id, { localizacao: `${lat},${lng}`, origem: 'busca por endereço' }, req.ip);
-    return { lat, lng, geoSource: 'geocoder', label: hits[0].display_name };
+    if (!customer.address?.trim() && !customer.zip) throw new BadRequestException('Cliente sem endereço cadastrado.');
+    const hit = await this.geo.locate(customer);
+    if (!hit) throw new BadRequestException('Endereço não encontrado no mapa. Marque o local manualmente.');
+    await this.db.customer.update({ where: { id }, data: { lat: hit.lat, lng: hit.lng, geoSource: hit.source } });
+    await this.audit.log(u, 'update', 'Customer', id, { localizacao: `${hit.lat},${hit.lng}`, origem: hit.source }, req.ip);
+    return { lat: hit.lat, lng: hit.lng, geoSource: hit.source, label: hit.label };
   }
 
   private async find(companyId: string, id: string) {
@@ -530,8 +629,8 @@ export class CustomerGeoController {
 }
 
 @Module({
-  controllers: [RoutesController, FieldController, CustomerGeoController],
-  providers: [FieldService],
-  exports: [FieldService],
+  controllers: [RoutesController, FieldController, CustomerGeoController, CepController],
+  providers: [FieldService, GeoService],
+  exports: [FieldService, GeoService],
 })
 export class FieldModule {}

@@ -352,7 +352,8 @@ export class ExtController {
       orderBy: { name: 'asc' },
       select: {
         id: true, name: true, document: true, phone: true, whatsapp: true, email: true,
-        birthdate: true, address: true, priceListId: true, lat: true, lng: true, updatedAt: true,
+        birthdate: true, address: true, zip: true, street: true, number: true, complement: true,
+        district: true, city: true, state: true, priceListId: true, lat: true, lng: true, geoSource: true, updatedAt: true,
       },
     });
     const credit = await this.credit.statusOf(s.companyId, rows.map((c) => c.id));
