@@ -39,6 +39,7 @@ class SettingsDto {
   @IsOptional() @IsString() receiptFooter?: string;
   @IsOptional() @IsInt() @Min(1) crediarioIntervalDays?: number;
   @IsOptional() @IsInt() @Min(0) crediarioGraceDays?: number;
+  @IsOptional() @IsInt() @Min(20) visitRadiusM?: number;
 }
 
 class PixConfigDto {

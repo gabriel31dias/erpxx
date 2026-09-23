@@ -22,6 +22,9 @@ export const PERMISSIONS = [
   'pdv.acessar', 'pdv.desconto', 'pdv.cancelar_item', 'pdv.cancelar_venda',
   'venda.visualizar',
 
+  'roteiro.visualizar', // mapa de campo e roteiros dos vendedores externos
+  'roteiro.gerenciar',
+
   'caixa.visualizar', 'caixa.abrir', 'caixa.fechar', 'caixa.sangria', 'caixa.suprimento',
 
   'financeiro.visualizar', 'financeiro.gerenciar',

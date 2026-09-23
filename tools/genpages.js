@@ -40,11 +40,13 @@ const MENU = [
   { key: 'pdv', href: '/pdv.html', label: 'PDV', icon: 'ecommerce', perm: 'pdv.acessar' },
   { key: 'vendas', href: '/vendas.html', label: 'Vendas', icon: 'file', perm: 'venda.visualizar' },
   { key: 'caixa', href: '/caixa.html', label: 'Caixa', icon: 'bonus-kit', perm: 'caixa.visualizar' },
+  { key: 'campo', href: '/campo.html', label: 'Mapa de campo', icon: 'maps', perm: 'roteiro.visualizar' },
   { group: 'Cadastros' },
   { key: 'produtos', href: '/produtos.html', label: 'Produtos', icon: 'to-do', perm: 'produto.visualizar' },
   { key: 'estoque', href: '/estoque.html', label: 'Estoque', icon: 'charts', perm: 'estoque.visualizar' },
   { key: 'clientes', href: '/clientes.html', label: 'Clientes', icon: 'contact', perm: 'cliente.visualizar' },
   { key: 'tabelas-preco', href: '/tabelas-preco.html', label: 'Tabelas de preço', icon: 'table', perm: 'produto.visualizar' },
+  { key: 'roteiros', href: '/roteiros.html', label: 'Roteiros de visita', icon: 'task', perm: 'roteiro.visualizar' },
   { key: 'fornecedores', href: '/fornecedores.html', label: 'Fornecedores', icon: 'social', perm: 'fornecedor.visualizar' },
   { group: 'Gestão' },
   { key: 'financeiro', href: '/financeiro.html', label: 'Financeiro', icon: 'ecommerce', perm: 'financeiro.visualizar' },
@@ -260,6 +262,8 @@ ${fields}
 }
 
 const APEX = '<script src="/assets/js/chart/apex-chart/apex-chart.js"></script>';
+const LEAFLET = '<script src="/assets/js/map-js/leaflet.js"></script>';
+const LEAFLET_CSS = '<link rel="stylesheet" href="/assets/css/vendors/leaflet.css">';
 
 const pages = [
   ['dashboard', 'Dashboard', 'index.html', APEX],
@@ -275,9 +279,12 @@ const pages = [
   ['entrada', 'Entrada de mercadoria', 'entrada.html', ''],
   ['importacao', 'Importar produtos', 'importacao.html', ''],
   ['clientes', 'Clientes', 'clientes.html', ''],
-  ['cliente', 'Cliente', 'cliente.html', ''],
+  ['cliente', 'Cliente', 'cliente.html', LEAFLET, LEAFLET_CSS],
   ['tabelas-preco', 'Tabelas de preço', 'tabelas-preco.html', ''],
   ['tabela-preco', 'Tabela de preço', 'tabela-preco.html', ''],
+  ['roteiros', 'Roteiros de visita', 'roteiros.html', ''],
+  ['roteiro', 'Roteiro', 'roteiro.html', LEAFLET, LEAFLET_CSS],
+  ['campo', 'Mapa de campo', 'campo.html', LEAFLET, LEAFLET_CSS],
   ['fornecedores', 'Fornecedores', 'fornecedores.html', ''],
   ['fornecedor', 'Fornecedor', 'fornecedor.html', ''],
   ['financeiro', 'Financeiro', 'financeiro.html', APEX],

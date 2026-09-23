@@ -960,6 +960,128 @@ async function main() {
     assert.equal((await outra('PATCH', `/api/customers/${joana.id}/credit`, { creditLimitCents: 1 })).status, 404);
   });
 
+  // ---------- roteiros e visitas ----------
+  console.log('\nRoteiros e visitas');
+  const { routeRunsOn, distanceM } = await import('../src/modules/field');
+  await check('recorrência: sempre = seg–sáb, dias marcados, esporádico e vigência', () => {
+    const r = (x: any) => ({ weekdays: 0, date: null, startDate: null, endDate: null, ...x });
+    assert.equal(routeRunsOn(r({ recurrence: 'ALWAYS' }), '2026-09-21'), true); // segunda
+    assert.equal(routeRunsOn(r({ recurrence: 'ALWAYS' }), '2026-09-26'), true); // sábado
+    assert.equal(routeRunsOn(r({ recurrence: 'ALWAYS' }), '2026-09-27'), false); // domingo
+    const segQui = (1 << 1) | (1 << 4);
+    assert.equal(routeRunsOn(r({ recurrence: 'WEEKDAYS', weekdays: segQui }), '2026-09-24'), true); // quinta
+    assert.equal(routeRunsOn(r({ recurrence: 'WEEKDAYS', weekdays: segQui }), '2026-09-23'), false); // quarta
+    assert.equal(routeRunsOn(r({ recurrence: 'ONCE', date: '2026-09-25' }), '2026-09-25'), true);
+    assert.equal(routeRunsOn(r({ recurrence: 'ONCE', date: '2026-09-25' }), '2026-09-26'), false);
+    assert.equal(routeRunsOn(r({ recurrence: 'ALWAYS', endDate: '2026-09-22' }), '2026-09-23'), false);
+    assert.ok(Math.abs(distanceM(-23.55, -46.63, -23.56, -46.63) - 1112) < 5); // 0,01° de latitude ≈ 1,1 km
+  });
+
+  const hoje = (await api('GET', '/api/field/live')).data.date;
+  const ontem = addDays(hoje, -1);
+  const mercearia = (await api('POST', '/api/customers', { name: 'Mercearia Boa Vista' })).data;
+  await api('PATCH', `/api/customers/${joana.id}/geo`, { lat: -23.5505, lng: -46.6333 });
+  await api('PATCH', `/api/customers/${clienteId}/geo`, { lat: -23.5600, lng: -46.6400 });
+  const rota = await api('POST', '/api/routes', {
+    sellerId: vendedor.data.id, name: 'Centro', recurrence: 'ONCE', date: hoje,
+    customerIds: [joana.id, clienteId, mercearia.id],
+  });
+  await api('POST', '/api/routes', {
+    sellerId: vendedor.data.id, name: 'Ontem', recurrence: 'ONCE', date: ontem, customerIds: [joana.id],
+  });
+
+  await check('caixa não vê nem cria roteiro; outra empresa não usa vendedor/cliente alheio', async () => {
+    assert.equal(rota.status, 201, JSON.stringify(rota.data));
+    assert.equal((await caixa('GET', '/api/routes')).status, 403);
+    assert.equal((await caixa('POST', '/api/routes', { sellerId: vendedor.data.id, name: 'X', recurrence: 'ALWAYS', customerIds: [] })).status, 403);
+    const alheio = await outra('POST', '/api/routes', { sellerId: vendedor.data.id, name: 'X', recurrence: 'ALWAYS', customerIds: [] });
+    assert.equal(alheio.status, 400);
+    const semData = await api('POST', '/api/routes', { sellerId: vendedor.data.id, name: 'X', recurrence: 'ONCE', customerIds: [] });
+    assert.equal(semData.status, 400);
+  });
+
+  await check('app recebe a agenda do dia na ordem do roteiro', async () => {
+    const r = await ext('GET', '/api/ext/agenda');
+    assert.equal(r.status, 200);
+    assert.equal(r.data.date, hoje);
+    assert.equal(r.data.radiusM, 150);
+    assert.deepEqual(r.data.rows.map((x: any) => [x.order, x.customer.id, x.status]),
+      [[1, joana.id, 'PENDING'], [2, clienteId, 'PENDING'], [3, mercearia.id, 'PENDING']]);
+    assert.equal(r.data.rows[0].customer.lat, -23.5505);
+  });
+
+  const chegada = await ext('POST', '/api/ext/visits/checkin', { customerId: joana.id, lat: -23.5507, lng: -46.6334, accuracy: 12 });
+  await check('check-in perto do cliente vale; repetir devolve a mesma visita', async () => {
+    assert.equal(chegada.status, 201, JSON.stringify(chegada.data));
+    assert.equal(chegada.data.status, 'IN_PROGRESS');
+    assert.ok(chegada.data.distanceM < 50);
+    assert.equal(chegada.data.outOfRange, false);
+    const again = await ext('POST', '/api/ext/visits/checkin', { customerId: joana.id, lat: -23.5507, lng: -46.6334 });
+    assert.equal(again.data.id, chegada.data.id);
+  });
+
+  await check('check-in longe do cliente fica marcado e gera alerta', async () => {
+    const r = await ext('POST', '/api/ext/visits/checkin', { customerId: clienteId, lat: -23.5700, lng: -46.6400, accuracy: 10 });
+    assert.equal(r.data.outOfRange, true);
+    assert.ok(r.data.distanceM > 1000);
+    assert.ok(await db.auditLog.findFirst({ where: { action: 'visit_alert', entityId: r.data.id } }));
+  });
+
+  await check('saída sem venda exige motivo', async () => {
+    const semMotivo = await ext('POST', `/api/ext/visits/${chegada.data.id}/checkout`, { outcome: 'SEM_VENDA' });
+    assert.equal(semMotivo.status, 400);
+    const r = await ext('POST', `/api/ext/visits/${chegada.data.id}/checkout`, { outcome: 'SEM_VENDA', reason: 'Estoque cheio' });
+    assert.equal(r.data.status, 'DONE');
+    assert.equal(r.data.reason, 'Estoque cheio');
+  });
+
+  await check('justificativa e visita fora do roteiro; cliente sem mapa ganha o local do check-in', async () => {
+    const pulo = await ext('POST', '/api/ext/visits/skip', { customerId: mercearia.id, reason: 'Loja fechada' });
+    assert.equal(pulo.data.status, 'SKIPPED');
+    assert.equal((await ext('POST', '/api/ext/visits/skip', { customerId: joana.id, reason: 'x x x' })).status, 400);
+    const avulso = (await api('POST', '/api/customers', { name: 'Bar do Zé' })).data;
+    await ext('POST', '/api/ext/visits/checkin', { customerId: avulso.id, lat: -23.54, lng: -46.62, accuracy: 20 });
+    const c = await db.customer.findUniqueOrThrow({ where: { id: avulso.id } });
+    assert.equal(c.lat, -23.54);
+    assert.equal(c.geoSource, 'checkin');
+    const agenda = await ext('GET', '/api/ext/agenda');
+    const extra = agenda.data.rows.find((x: any) => x.customer.id === avulso.id);
+    assert.equal(extra.planned, false);
+    assert.equal(extra.order, 4);
+  });
+
+  await check('posições do app: trajeto do dia e última posição (ping atrasado não volta)', async () => {
+    const t = Date.now();
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const r = await ext('POST', '/api/ext/pings', { pings: [
+      { lat: -23.551, lng: -46.634, accuracy: 8, at: iso(t - 120_000) },
+      { lat: -23.552, lng: -46.635, accuracy: 8, at: iso(t) }, // depois do último check-in
+    ] });
+    assert.equal(r.data.accepted, 2);
+    await ext('POST', '/api/ext/pings', { pings: [{ lat: -23.9, lng: -46.9, at: iso(t - 600_000) }] }); // da fila offline
+    const live = await api('GET', '/api/field/live');
+    const v = live.data.sellers.find((x: any) => x.id === vendedor.data.id);
+    assert.equal(v.lastLat, -23.552);
+    const track = await api('GET', `/api/field/track?sellerId=${vendedor.data.id}`);
+    assert.equal(track.data.rows.length, 3);
+  });
+
+  await check('mapa ao vivo resume o dia; dia passado sem visita = não visitado', async () => {
+    const live = await api('GET', '/api/field/live');
+    const s = live.data.sellers.find((x: any) => x.id === vendedor.data.id).summary;
+    assert.deepEqual([s.planned, s.done, s.inProgress, s.skipped, s.outOfRange], [3, 1, 2, 1, 1]);
+    const passado = await api('GET', `/api/field/live?date=${ontem}`);
+    const stops = passado.data.sellers.find((x: any) => x.id === vendedor.data.id).stops;
+    assert.deepEqual(stops.map((x: any) => x.status), ['MISSED']);
+  });
+
+  await check('mapa de campo de uma empresa não mostra outra', async () => {
+    const live = await outra('GET', '/api/field/live');
+    assert.equal(live.data.sellers.length, 0);
+    assert.equal((await outra('GET', `/api/field/track?sellerId=${vendedor.data.id}`)).status, 404);
+    assert.equal((await outra('PATCH', `/api/customers/${joana.id}/geo`, { lat: 0, lng: 0 })).status, 404);
+  });
+
   await check('vendedor bloqueado perde o acesso na hora', async () => {
     await api('PATCH', `/api/sellers/${vendedor.data.id}`, {
       name: 'Carlos Rua', cpf: '52998224725', username: 'carlos.rua', active: false,

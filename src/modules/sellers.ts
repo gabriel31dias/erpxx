@@ -19,6 +19,7 @@ import { DATE_RE, DT_RE, isCpf, onlyDigits, paging } from '../common/util';
 import { SALE_INCLUDE, SaleItemDto, SalePaymentDto, SalesModule, SalesService } from './sales';
 import { PaymentsModule, PixGateway } from './payments';
 import { CreditModule, CreditService, CreditStatus } from './credit';
+import { CheckInDto, CheckOutDto, FieldModule, FieldService, PingsDto, SkipDto } from './field';
 import { AttachmentsModule, AttachmentsService, RECEIPT_UPLOAD, UploadFile } from './attachments';
 
 const USERNAME_RE = /^[a-z0-9._-]{3,40}$/;
@@ -262,6 +263,7 @@ export class ExtController {
     private settings: SettingsService,
     private attachments: AttachmentsService,
     private credit: CreditService,
+    private field: FieldService,
   ) {}
 
   /** PIX pelo app: ligado nas configurações da loja e com o gateway configurado. */
@@ -350,7 +352,7 @@ export class ExtController {
       orderBy: { name: 'asc' },
       select: {
         id: true, name: true, document: true, phone: true, whatsapp: true, email: true,
-        birthdate: true, address: true, priceListId: true, updatedAt: true,
+        birthdate: true, address: true, priceListId: true, lat: true, lng: true, updatedAt: true,
       },
     });
     const credit = await this.credit.statusOf(s.companyId, rows.map((c) => c.id));
@@ -394,6 +396,45 @@ export class ExtController {
       status: c.status, blockReason: c.blockReason,
       overdueCount: c.overdue.count, overdueCents: c.overdue.amountCents, overdueDays: c.overdue.days,
     };
+  }
+
+  // ---------- roteiro e visitas ----------
+
+  /**
+   * Agenda do vendedor no dia (padrão: hoje), na ordem do roteiro: clientes com
+   * coordenada e situação — PENDING, IN_PROGRESS, DONE, SKIPPED ou MISSED (dia passado).
+   * Visitas fora do roteiro aparecem no fim com `planned: false`.
+   */
+  @Get('agenda')
+  async agenda(@CurrentSeller() s: SellerSession, @Query('date') date?: string) {
+    const day = date && DATE_RE.test(date) ? date : await this.clock.today(s.companyId);
+    const stops = (await this.field.agenda(s.companyId, day, [s.sub])).get(s.sub) ?? [];
+    const settings = await this.settings.of(s.companyId);
+    return { date: day, radiusM: settings.visitRadiusM, total: stops.length, rows: stops };
+  }
+
+  /** Chegada no cliente. Offline: mande `at` com o horário do aparelho e reenvie quando a rede voltar. */
+  @Post('visits/checkin')
+  checkIn(@CurrentSeller() s: SellerSession, @Body() dto: CheckInDto) {
+    return this.field.checkIn(s.companyId, s.sub, dto);
+  }
+
+  /** Saída: resultado da visita (VENDA pede `saleId` quando houver; os outros pedem `reason`). */
+  @Post('visits/:id/checkout')
+  checkOut(@CurrentSeller() s: SellerSession, @Param('id') id: string, @Body() dto: CheckOutDto) {
+    return this.field.checkOut(s.companyId, s.sub, id, dto);
+  }
+
+  /** Não vai visitar o cliente do roteiro hoje: fica justificado em vez de "não visitado". */
+  @Post('visits/skip')
+  skip(@CurrentSeller() s: SellerSession, @Body() dto: SkipDto) {
+    return this.field.skip(s.companyId, s.sub, dto);
+  }
+
+  /** Posições do GPS em lote (a cada 1–2 min no expediente; a fila offline manda tudo junto). */
+  @Post('pings')
+  pings(@CurrentSeller() s: SellerSession, @Body() dto: PingsDto) {
+    return this.field.pings(s.companyId, s.sub, dto.pings);
   }
 
   /** Formas de pagamento aceitas no lote de vendas (crediário só se o plano da loja incluir). */
@@ -588,7 +629,7 @@ export class ExtController {
 }
 
 @Module({
-  imports: [SalesModule, PaymentsModule, AttachmentsModule, CreditModule],
+  imports: [SalesModule, PaymentsModule, AttachmentsModule, CreditModule, FieldModule],
   controllers: [SellersController, ExtAuthController, ExtController],
   providers: [SellerGuard],
 })

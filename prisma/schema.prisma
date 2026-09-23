@@ -139,6 +139,10 @@ model Company {
   fiscalDocs     FiscalDocument[]
   priceLists     PriceList[]
   priceListItems PriceListItem[]
+  routes         Route[]
+  routeStops     RouteStop[]
+  visits         Visit[]
+  sellerPings    SellerPing[]
   notifications  Notification[]
   auditLogs      AuditLog[]
   idempotency    IdempotencyKey[]
@@ -224,6 +228,12 @@ model Seller {
   active       Boolean   @default(true)
   lastLoginAt  DateTime?
 
+  // última posição recebida do app (mapa ao vivo sem varrer os pings)
+  lastLat      Float?
+  lastLng      Float?
+  lastAccuracy Float?
+  lastSeenAt   DateTime?
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
@@ -231,6 +241,9 @@ model Seller {
   company     Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   sales       Sale[]
   attachments SaleAttachment[]
+  routes      Route[]
+  visits      Visit[]
+  pings       SellerPing[]
 
   @@unique([companyId, cpf])
   @@index([companyId])
@@ -454,6 +467,11 @@ model Customer {
   creditStatus      String  @default("LIBERADO") // LIBERADO | BLOQUEADO
   creditBlockReason String?
 
+  // ---- Localização (roteiros e check-in de visitas) ----
+  lat       Float?
+  lng       Float?
+  geoSource String? // manual | geocoder | checkin
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
@@ -462,6 +480,8 @@ model Customer {
   priceList  PriceList?     @relation(fields: [priceListId], references: [id])
   sales      Sale[]
   finEntries FinanceEntry[]
+  routeStops RouteStop[]
+  visits     Visit[]
 
   @@index([companyId, name])
   @@index([companyId, phone])
@@ -509,6 +529,101 @@ model PriceListItem {
 
   @@unique([priceListId, productId])
   @@index([companyId, productId])
+}
+
+/**
+ * Roteiro de visitas de um vendedor externo. A agenda de um dia é calculada na
+ * hora (roteiros válidos na data × visitas registradas) — não há job gerando visitas.
+ */
+model Route {
+  id         String  @id @default(cuid())
+  companyId  String
+  sellerId   String
+  name       String
+  recurrence String // ALWAYS (seg–sáb) | WEEKDAYS (dias marcados) | ONCE (data única)
+  weekdays   Int     @default(0) // máscara: dom=1, seg=2, ter=4, qua=8, qui=16, sex=32, sáb=64
+  date       String? // "YYYY-MM-DD" quando ONCE
+  startDate  String? // vigência (inclusive)
+  endDate    String?
+  notes      String?
+  active     Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  company Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  seller  Seller      @relation(fields: [sellerId], references: [id])
+  stops   RouteStop[]
+  visits  Visit[]
+
+  @@index([companyId, sellerId, active])
+}
+
+model RouteStop {
+  id         String  @id @default(cuid())
+  companyId  String
+  routeId    String
+  customerId String
+  position   Int // ordem da visita no roteiro (1..N)
+  notes      String?
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  route    Route    @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@unique([routeId, customerId])
+  @@index([routeId, position])
+}
+
+/** Visita registrada (check-in). Visita planejada sem registro vira "não visitada" depois do dia. */
+model Visit {
+  id          String  @id @default(cuid())
+  companyId   String
+  sellerId    String
+  customerId  String
+  routeId     String? // null = visita fora do roteiro
+  date        String // "YYYY-MM-DD" no fuso da empresa
+  status      String // IN_PROGRESS | DONE | SKIPPED (justificada sem ir)
+  checkInAt   String? // "YYYY-MM-DD HH:mm" do aparelho
+  checkInLat  Float?
+  checkInLng  Float?
+  accuracyM   Float?
+  distanceM   Int? // do cliente, quando ele tem coordenada
+  outOfRange  Boolean @default(false)
+  mockLocation Boolean @default(false) // aparelho informou localização simulada
+  checkOutAt  String?
+  outcome     String? // VENDA | SEM_VENDA | FECHADO | AUSENTE
+  reason      String?
+  saleId      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  seller   Seller   @relation(fields: [sellerId], references: [id])
+  customer Customer @relation(fields: [customerId], references: [id])
+  route    Route?   @relation(fields: [routeId], references: [id])
+
+  @@unique([sellerId, customerId, date])
+  @@index([companyId, date])
+}
+
+/** Posição do app durante o expediente (trajeto do dia no mapa). */
+model SellerPing {
+  id        String   @id @default(cuid())
+  companyId String
+  sellerId  String
+  lat       Float
+  lng       Float
+  accuracy  Float?
+  at        DateTime // instante no aparelho
+  localDate String // "YYYY-MM-DD" no fuso da empresa (consulta do trajeto do dia)
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  seller  Seller  @relation(fields: [sellerId], references: [id])
+
+  @@index([sellerId, localDate, at])
 }
 
 model PaymentMethod {

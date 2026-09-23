@@ -20,6 +20,7 @@ export default async function render({ content, can }) {
     receiptFooter: textarea({ value: s.receiptFooter, rows: 2 }),
     crediarioIntervalDays: input({ inputmode: 'numeric', value: String(s.crediarioIntervalDays ?? 30) }),
     crediarioGraceDays: input({ inputmode: 'numeric', value: String(s.crediarioGraceDays ?? 0) }),
+    visitRadiusM: input({ inputmode: 'numeric', value: String(s.visitRadiusM ?? 150) }),
   };
 
   const linha = (campo, titulo, descricao) => h('div', { class: 'col-12 col-md-6' },
@@ -47,6 +48,9 @@ export default async function render({ content, can }) {
     field('Crediário: tolerância de atraso (dias)', f.crediarioGraceDays, {
       col: 'col-6 col-md-3', help: 'Atraso maior que isso barra nova compra no crediário.',
     }),
+    field('Visitas: raio do check-in (metros)', f.visitRadiusM, {
+      col: 'col-6 col-md-3', help: 'Check-in mais longe que isso do cliente aparece como "fora do local".',
+    }),
     field('Rodapé do comprovante', f.receiptFooter, { col: 'col-12' }),
     h('div', { class: 'col-12 text-end' }, salvar));
 
@@ -65,6 +69,7 @@ export default async function render({ content, can }) {
         receiptFooter: f.receiptFooter.value.trim(),
         crediarioIntervalDays: Math.max(1, parseInt(f.crediarioIntervalDays.value, 10) || 30),
         crediarioGraceDays: Math.max(0, parseInt(f.crediarioGraceDays.value, 10) || 0),
+        visitRadiusM: Math.max(20, parseInt(f.visitRadiusM.value, 10) || 150),
       });
       toast('Configurações salvas.');
     } catch (err) { toast(err.message, 'error'); } finally { salvar.disabled = false; }

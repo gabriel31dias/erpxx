@@ -116,3 +116,21 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 /* gráficos nunca passam da largura do card (Apex desenha SVG com largura fixa) */
 .lf-chart { width: 100%; max-width: 100%; min-width: 0; overflow: hidden; }
 .card-body:has(> .lf-chart) { min-width: 0; overflow: hidden; }
+
+/* ---------- mapas (roteiros e campo) ---------- */
+.lf-map { height: 520px; border-radius: 8px; z-index: 0; }
+@media (max-width: 767px) { .lf-map { height: 380px; } }
+.lf-pin-wrap { background: none; border: 0; }
+.lf-pin {
+  display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%;
+  color: #fff; font: 700 12px/1 Montserrat, sans-serif; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35);
+}
+.lf-seller {
+  display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 50%;
+  background: #363afe; color: #fff; font: 700 13px/1 Montserrat, sans-serif; border: 4px solid #8a94a6;
+  box-shadow: 0 2px 6px rgba(0,0,0,.35);
+}
+.lf-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.lf-campo-lista { max-height: 520px; overflow-y: auto; }
+.lf-campo-vendedor { cursor: pointer; }
+.lf-campo-vendedor.is-on { outline: 2px solid #363afe; }

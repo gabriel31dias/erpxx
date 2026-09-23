@@ -1,6 +1,7 @@
 // Ficha do cliente: cadastro + histórico de compras e indicadores.
 import { get, patch, post } from '../api.js';
 import { pageTitle } from '../shell.js';
+import { criarMapa } from '../mapa.js';
 import { mount,
   card, centsToInput, field, fmtBRL, fmtDate, h, input, moneyInput, moneyToCents, refreshIcons, select, statCard,
   textarea, toast, todayStr,
@@ -102,14 +103,66 @@ export default async function render({ content, can }) {
     : h('p', { class: 'txt-secondary mb-0' }, 'Este cliente ainda não comprou.')) : null;
 
   const credito = id ? await blocoCredito(id, can('credito.gerenciar')) : null;
+  const local = id && window.L ? blocoLocal(c, editavel) : null;
 
   mount(content,
     pageTitle(id ? c.name : 'Novo cliente'),
     stats,
     card('Dados do cliente', form),
+    local?.el,
     credito,
     historico);
+  local?.iniciar();
   refreshIcons(content);
+}
+
+/** Localização do cliente no mapa (check-in e roteiros): arrastar o pino ou buscar pelo endereço. */
+function blocoLocal(c, editavel) {
+  const mapaEl = h('div', { class: 'lf-map', style: 'height:280px' });
+  const info = h('small', { class: 'txt-secondary' });
+  const ORIGEM = { manual: 'marcado no mapa', geocoder: 'encontrado pelo endereço', checkin: 'do primeiro check-in do vendedor' };
+  const legenda = () => {
+    info.textContent = c.lat == null ? 'Sem localização. Busque pelo endereço ou clique no mapa para marcar.'
+      : `${c.lat.toFixed(5)}, ${c.lng.toFixed(5)} · ${ORIGEM[c.geoSource] ?? ''}`;
+  };
+  const buscar = editavel && c.address ? h('button', { class: 'btn btn-sm btn-outline-primary', type: 'button' }, 'Buscar pelo endereço') : null;
+  let map;
+  let pino;
+  const posicionar = (lat, lng, zoom) => {
+    if (!pino) {
+      pino = window.L.marker([lat, lng], { draggable: editavel }).addTo(map);
+      pino.on('dragend', () => { const p = pino.getLatLng(); salvar(p.lat, p.lng); });
+    } else pino.setLatLng([lat, lng]);
+    map.setView([lat, lng], zoom ?? Math.max(map.getZoom(), 16));
+  };
+  async function salvar(lat, lng) {
+    try {
+      Object.assign(c, await patch(`/customers/${c.id}/geo`, { lat, lng }));
+      legenda();
+      toast('Localização do cliente salva.');
+    } catch (e) { toast(e.message, 'error'); }
+  }
+  if (buscar) {
+    buscar.onclick = async () => {
+      buscar.disabled = true;
+      try {
+        const g = await post(`/customers/${c.id}/geo/lookup`);
+        Object.assign(c, g);
+        posicionar(g.lat, g.lng, 16);
+        legenda();
+        toast('Encontrado. Arraste o pino se precisar ajustar.');
+      } catch (e) { toast(e.message, 'error'); } finally { buscar.disabled = false; }
+    };
+  }
+  return {
+    el: card('Localização', h('div', {}, mapaEl, h('div', { class: 'mt-2' }, info)), buscar),
+    iniciar() {
+      map = criarMapa(mapaEl);
+      if (c.lat != null) posicionar(c.lat, c.lng, 16);
+      if (editavel) map.on('click', (e) => { posicionar(e.latlng.lat, e.latlng.lng); salvar(e.latlng.lat, e.latlng.lng); });
+      legenda();
+    },
+  };
 }
 
 /** Crediário: limite, uso, atraso e parcelas em aberto; quem tem credito.gerenciar edita. */

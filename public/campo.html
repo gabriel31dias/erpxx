@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="pt-BR" data-page="notificacoes">
+<html lang="pt-BR" data-page="campo">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="LojaFlow — ERP e PDV para lojas: vendas, estoque, caixa, financeiro e relatórios.">
-<title>Notificações · LojaFlow</title>
+<title>Mapa de campo · LojaFlow</title>
 <link rel="icon" href="/assets/images/favicon.png" type="image/x-icon">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#363afe">
@@ -21,7 +21,7 @@
 <link id="color" rel="stylesheet" href="/assets/css/color-1.css" media="screen">
 <link rel="stylesheet" type="text/css" href="/assets/css/responsive.css">
 <link rel="stylesheet" href="/app.css">
-
+<link rel="stylesheet" href="/assets/css/vendors/leaflet.css">
 </head>
 <body>
 <div class="loader-wrapper"><div class="loader"><div class="loader4"></div></div></div>
@@ -111,8 +111,8 @@
               <li class="sidebar-list" data-key="caixa" data-perm="caixa.visualizar"><i class="fa fa-thumb-tack"></i>
        <a class="sidebar-link sidebar-title link-nav" href="/caixa.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-bonus-kit"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-bonus-kit"></use></svg><span>Caixa</span></a>
      </li>
-              <li class="sidebar-list" data-key="campo" data-perm="roteiro.visualizar"><i class="fa fa-thumb-tack"></i>
-       <a class="sidebar-link sidebar-title link-nav" href="/campo.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-maps"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-maps"></use></svg><span>Mapa de campo</span></a>
+              <li class="sidebar-list active" data-key="campo" data-perm="roteiro.visualizar"><i class="fa fa-thumb-tack"></i>
+       <a class="sidebar-link sidebar-title link-nav active" href="/campo.html"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-maps"></use></svg><svg class="fill-icon"><use href="/assets/svg/icon-sprite.svg#fill-maps"></use></svg><span>Mapa de campo</span></a>
      </li>
               <li class="sidebar-main-title"><div><h6>Cadastros</h6></div></li>
               <li class="sidebar-list" data-key="produtos" data-perm="produto.visualizar"><i class="fa fa-thumb-tack"></i>
@@ -174,11 +174,11 @@
       <div class="container-fluid">
         <div class="page-title">
           <div class="row">
-            <div class="col-6"><h3 id="lf-title">Notificações</h3></div>
+            <div class="col-6"><h3 id="lf-title">Mapa de campo</h3></div>
             <div class="col-6">
               <ol class="breadcrumb">
                 <li class="breadcrumb-item"><a href="/"><svg class="stroke-icon"><use href="/assets/svg/icon-sprite.svg#stroke-home"></use></svg></a></li>
-                <li class="breadcrumb-item active" id="lf-crumb">Notificações</li>
+                <li class="breadcrumb-item active" id="lf-crumb">Mapa de campo</li>
               </ol>
             </div>
           </div>
@@ -207,7 +207,7 @@
 <script src="/assets/js/sidebar-menu.js"></script>
 <script src="/assets/js/sidebar-pin.js"></script>
 <script src="/assets/js/script.js"></script>
-
+<script src="/assets/js/map-js/leaflet.js"></script>
 <script type="module" src="/js/shell.js"></script>
 </body>
 </html>
