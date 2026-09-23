@@ -15,7 +15,7 @@ import * as bcrypt from 'bcryptjs';
 import { PRISMA, Db } from '../common/prisma.service';
 import { CurrentUser, Perms, Public, SessionUser, SkipCsrf } from '../common/auth.guard';
 import { AuditService, BranchService, IdempotencyService, SettingsService, TimeService } from '../common/core';
-import { DATE_RE, DT_RE, isCpf, itemTotalCents, onlyDigits, paging, roundQty } from '../common/util';
+import { DATE_RE, DT_RE, isCpf, onlyDigits, paging } from '../common/util';
 import { SALE_INCLUDE, SaleItemDto, SalePaymentDto, SalesModule, SalesService } from './sales';
 import { PaymentsModule, PixGateway } from './payments';
 import { AttachmentsModule, AttachmentsService, RECEIPT_UPLOAD, UploadFile } from './attachments';
@@ -300,13 +300,43 @@ export class ExtController {
         stocks: { where: { branchId }, select: { quantity: true } },
       },
     });
+    // priceCents = basePriceCents = preço do cadastro. O preço do cliente sai de GET price-lists.
     return {
       total: rows.length,
-      rows: rows.map(({ stocks, ...p }) => ({ ...p, stock: stocks[0]?.quantity ?? 0 })),
+      rows: rows.map(({ stocks, ...p }) => ({ ...p, basePriceCents: p.priceCents, stock: stocks[0]?.quantity ?? 0 })),
     };
   }
 
-  /** Todos os clientes ativos, sem paginação. */
+  /**
+   * Todas as tabelas de preço ativas, com todos os itens, sem paginação — o app
+   * guarda para precificar no PDV mobile, inclusive offline. A regra é a do servidor:
+   *
+   *   cliente sem priceListId (ou tabela fora desta lista) → basePriceCents do produto
+   *   produto com item na tabela                           → item.priceCents
+   *   produto sem item                                      → round(base × (10000 + adjustBp) / 10000)
+   *
+   * A venda deve mandar o unitPriceCents usado. Venda offline cujo preço mudou no
+   * servidor depois de soldAt é aceita com o preço do aparelho; online, o preço
+   * precisa bater com o atual (senão 403 — recarregue as tabelas).
+   * `updatedAt` de cada tabela muda a cada alteração: dá para baixar só quando mudar.
+   */
+  @Get('price-lists')
+  async priceLists(@CurrentSeller() s: SellerSession) {
+    const rows = await this.db.priceList.findMany({
+      where: { companyId: s.companyId, deletedAt: null, active: true },
+      orderBy: { name: 'asc' },
+      select: {
+        id: true, name: true, description: true, adjustBp: true, updatedAt: true,
+        items: {
+          where: { product: { deletedAt: null, active: true } },
+          select: { productId: true, priceCents: true },
+        },
+      },
+    });
+    return { total: rows.length, rows };
+  }
+
+  /** Todos os clientes ativos, sem paginação. `priceListId` diz a tabela de preço do cliente. */
   @Get('customers')
   async customers(@CurrentSeller() s: SellerSession) {
     const rows = await this.db.customer.findMany({
@@ -314,7 +344,7 @@ export class ExtController {
       orderBy: { name: 'asc' },
       select: {
         id: true, name: true, document: true, phone: true, whatsapp: true, email: true,
-        birthdate: true, address: true, updatedAt: true,
+        birthdate: true, address: true, priceListId: true, updatedAt: true,
       },
     });
     return { total: rows.length, rows };
@@ -381,15 +411,9 @@ export class ExtController {
       });
       if (!method) throw new BadRequestException('A loja não tem a forma de pagamento PIX ativa.');
 
-      // total calculado com o preço do cadastro — o mesmo que a venda vai gravar
-      const products = await this.db.product.findMany({
-        where: { companyId: s.companyId, deletedAt: null, id: { in: dto.items.map((i) => i.productId) } },
-        select: { id: true, priceCents: true },
-      });
-      const price = new Map(products.map((p) => [p.id, p.priceCents]));
-      const total = dto.items.reduce((sum, i) =>
-        sum + itemTotalCents(price.get(i.productId) ?? 0, roundQty(i.quantity), i.discountCents ?? 0), 0)
-        - (dto.discountCents ?? 0);
+      // mesma precificação que a venda vai gravar (cadastro ou tabela do cliente)
+      const actor = { companyId: s.companyId, branchId: null, role: 'vendedor_externo', userId: null, sellerId: s.sub };
+      const { total } = await this.sales.price(actor, dto, await this.clock.now(s.companyId));
       if (total <= 0) throw new BadRequestException('Total da venda precisa ser maior que zero.');
 
       const customer = dto.customerId
@@ -399,7 +423,7 @@ export class ExtController {
       const charge = await this.pix.charge(s.companyId, total, `Venda externa · ${seller.name}`, customer ?? undefined);
 
       const sale = await this.sales.create(
-        { companyId: s.companyId, branchId: null, role: 'vendedor_externo', userId: null, sellerId: s.sub },
+        actor,
         {
           customerId: dto.customerId, discountCents: dto.discountCents, notes: dto.notes, items: dto.items,
           payments: [{ paymentMethodId: method.id, amountCents: total }],

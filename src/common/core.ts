@@ -227,14 +227,15 @@ export class TimeService {
   private tz = new Map<string, string>();
   constructor(@Inject(PRISMA) private db: Db) {}
 
-  async now(companyId: string): Promise<string> {
+  /** Agora — ou o instante `at` — como "YYYY-MM-DD HH:mm" no fuso da empresa. */
+  async now(companyId: string, at?: Date): Promise<string> {
     let zone = this.tz.get(companyId);
     if (!zone) {
       const c = await this.db.company.findUnique({ where: { id: companyId }, select: { timezone: true } });
       zone = c?.timezone || 'America/Sao_Paulo';
       this.tz.set(companyId, zone);
     }
-    return nowIn(zone);
+    return nowIn(zone, at);
   }
 
   async today(companyId: string) {

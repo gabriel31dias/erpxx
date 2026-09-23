@@ -1,5 +1,6 @@
 import {
-  Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, Req,
+  BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Inject, Module, NotFoundException,
+  Param, Patch, Post, Query, Req,
 } from '@nestjs/common';
 import { IsBoolean, IsEmail, IsOptional, IsString, Matches, MinLength } from 'class-validator';
 import type { Request } from 'express';
@@ -7,6 +8,9 @@ import { PRISMA, Db } from '../common/prisma.service';
 import { CurrentUser, Perms, SessionUser } from '../common/auth.guard';
 import { AuditService } from '../common/core';
 import { DATE_RE, paging } from '../common/util';
+import { can } from '../common/rbac';
+
+const PRICE_LIST = { priceList: { select: { id: true, name: true, active: true } } } as const;
 
 class CustomerDto {
   @IsString() @MinLength(2) name!: string;
@@ -18,6 +22,8 @@ class CustomerDto {
   @IsOptional() @IsString() address?: string;
   @IsOptional() @IsString() notes?: string;
   @IsOptional() @IsBoolean() active?: boolean;
+  /** Tabela de preço. Ausente = não mexe; null = volta ao preço do cadastro. */
+  @IsOptional() @IsString() priceListId?: string | null;
 }
 
 class SupplierDto {
@@ -59,7 +65,7 @@ export class CustomersController {
       } : {}),
     };
     const [rows, total] = await Promise.all([
-      this.db.customer.findMany({ where, orderBy: { name: 'asc' }, take, skip }),
+      this.db.customer.findMany({ where, orderBy: { name: 'asc' }, take, skip, include: PRICE_LIST }),
       this.db.customer.count({ where }),
     ]);
     return { rows, total, ...rest };
@@ -68,7 +74,7 @@ export class CustomersController {
   @Get(':id')
   async detail(@CurrentUser() u: SessionUser, @Param('id') id: string) {
     const customer = await this.db.customer.findFirst({
-      where: { id, companyId: u.companyId, deletedAt: null },
+      where: { id, companyId: u.companyId, deletedAt: null }, include: PRICE_LIST,
     });
     if (!customer) throw new NotFoundException('Cliente não encontrado.');
 
@@ -106,8 +112,12 @@ export class CustomersController {
 
   @Post() @Perms('cliente.gerenciar')
   async create(@CurrentUser() u: SessionUser, @Body() dto: CustomerDto, @Req() req: Request) {
-    const customer = await this.db.customer.create({ data: { ...this.data(dto), companyId: u.companyId } });
-    await this.audit.log(u, 'create', 'Customer', customer.id, { nome: customer.name }, req.ip);
+    const priceListId = await this.priceList(u, dto, null);
+    const customer = await this.db.customer.create({
+      data: { ...this.data(dto), companyId: u.companyId, ...(priceListId !== undefined ? { priceListId } : {}) },
+    });
+    await this.audit.log(u, 'create', 'Customer', customer.id,
+      { nome: customer.name, ...(customer.priceListId ? { tabelaPreco: customer.priceListId } : {}) }, req.ip);
     return customer;
   }
 
@@ -115,9 +125,31 @@ export class CustomersController {
   async update(@CurrentUser() u: SessionUser, @Param('id') id: string, @Body() dto: CustomerDto, @Req() req: Request) {
     const before = await this.db.customer.findFirst({ where: { id, companyId: u.companyId, deletedAt: null } });
     if (!before) throw new NotFoundException('Cliente não encontrado.');
-    const customer = await this.db.customer.update({ where: { id }, data: this.data(dto) });
+    const priceListId = await this.priceList(u, dto, before.priceListId);
+    const customer = await this.db.customer.update({
+      where: { id }, data: { ...this.data(dto), ...(priceListId !== undefined ? { priceListId } : {}) },
+    });
     await this.audit.log(u, 'update', 'Customer', id, AuditService.diff(before, customer), req.ip);
     return customer;
+  }
+
+  /**
+   * Tabela de preço pedida no cadastro. Trocar a tabela muda o preço que o cliente
+   * paga, então exige a permissão de tabelas — o caixa edita o cliente, mas não o preço.
+   * Devolve undefined quando não há mudança.
+   */
+  private async priceList(u: SessionUser, dto: CustomerDto, current: string | null) {
+    if (dto.priceListId === undefined) return undefined;
+    const wanted = dto.priceListId || null;
+    if (wanted === current) return undefined;
+    if (!can(u.role, 'tabela_preco.gerenciar')) {
+      throw new ForbiddenException('Seu perfil não pode definir a tabela de preço do cliente.');
+    }
+    if (wanted) {
+      const list = await this.db.priceList.findFirst({ where: { id: wanted, companyId: u.companyId, deletedAt: null } });
+      if (!list) throw new BadRequestException('Tabela de preço não encontrada.');
+    }
+    return wanted;
   }
 
   @Delete(':id') @Perms('cliente.gerenciar')

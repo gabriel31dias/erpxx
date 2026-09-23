@@ -45,7 +45,8 @@ function addProduct(product, quantity = 1) {
   } else {
     state.items.push({
       productId: product.id, name: product.name, unit: product.unit, saleType: product.saleType,
-      quantity, unitPriceCents: product.priceCents, discountCents: 0, stock: product.stock,
+      quantity, unitPriceCents: product.priceCents, basePriceCents: product.basePriceCents ?? product.priceCents,
+      discountCents: 0, stock: product.stock,
     });
     state.index = state.items.length - 1;
   }
@@ -61,7 +62,8 @@ function removeItem(index) {
 async function buscar(term) {
   if (state.bloqueado) return;
   if (!term.trim()) return;
-  const data = await get('/products/lookup', { q: term, branchId: state.branchId });
+  // com cliente, a busca já devolve o preço da tabela dele
+  const data = await get('/products/lookup', { q: term, branchId: state.branchId, customerId: state.customer?.id });
   if (!data.rows.length) return toast('Produto não encontrado.', 'warning');
 
   if (data.exact || data.rows.length === 1) {
@@ -168,7 +170,7 @@ async function escolherCliente() {
     const { rows } = await get('/customers', { q: campo.value, pageSize: 8 });
     lista.replaceChildren(...(rows.length ? rows.map((c) => h('button', {
       class: 'list-group-item list-group-item-action',
-      onclick: () => { state.customer = c; m.close(); render(); },
+      onclick: () => { m.close(); definirCliente(c); },
     }, h('strong', {}, c.name), h('small', { class: 'd-block txt-secondary' }, c.phone || c.document || '')))
       : [h('div', { class: 'list-group-item txt-secondary' }, 'Nenhum cliente encontrado.')]));
   };
@@ -176,10 +178,37 @@ async function escolherCliente() {
 
   const limpar = h('button', { class: 'btn btn-light' }, 'Vender sem cliente');
   const m = modal({ title: 'Cliente da venda', body: h('div', {}, campo, lista), footer: [limpar] });
-  limpar.onclick = () => { state.customer = null; m.close(); render(); };
+  limpar.onclick = () => { m.close(); definirCliente(null); };
   m.el.addEventListener('hidden.bs.modal', () => focarBusca());
   setTimeout(() => campo.focus(), 150);
   carregar();
+}
+
+/** Troca o cliente e reprecifica o cupom pela tabela dele (ou volta ao cadastro). */
+function definirCliente(c) {
+  state.customer = c;
+  render();
+  reprecificar();
+}
+
+async function reprecificar() {
+  if (!state.items.length) return;
+  try {
+    const r = await post('/pricing/quote', {
+      customerId: state.customer?.id, productIds: [...new Set(state.items.map((i) => i.productId))],
+    });
+    const byId = new Map(r.rows.map((p) => [p.productId, p]));
+    for (const item of state.items) {
+      const p = byId.get(item.productId);
+      if (!p) continue;
+      item.unitPriceCents = p.priceCents;
+      item.basePriceCents = p.basePriceCents;
+      item.discountCents = Math.min(item.discountCents, itemGross(item)); // desconto nunca passa do item
+    }
+    render();
+  } catch {
+    toast('Sem conexão para aplicar a tabela do cliente — o cupom ficou com os preços anteriores.', 'warning');
+  }
 }
 
 // ---------- vendas suspensas ----------
@@ -209,6 +238,7 @@ function recuperar() {
       gravarSuspensas(lerSuspensas().filter((x) => x.id !== r.id));
       m.close();
       render();
+      reprecificar(); // a tabela pode ter mudado enquanto a venda esteve suspensa
     },
   },
     h('span', {}, `${r.items.length} item(ns)`,
@@ -797,6 +827,10 @@ function linhaItem(item, index) {
         title: 'Alterar quantidade',
         onclick: (e) => { e.stopPropagation(); alterarQuantidade(index); },
       }, `${fmtQty(item.quantity, item.unit)} × ${fmtBRL(item.unitPriceCents)}`),
+      item.basePriceCents !== undefined && item.basePriceCents !== item.unitPriceCents
+        ? h('span', { class: 'pdv-line-tag lf-num', title: 'Preço da tabela do cliente' },
+          `tabela · cadastro ${fmtBRL(item.basePriceCents)}`)
+        : null,
       item.discountCents
         ? h('span', { class: 'pdv-line-tag lf-num' }, `− ${fmtBRL(item.discountCents)}`)
         : null,
@@ -888,7 +922,9 @@ function render() {
         h('div', { class: 'pdv-row' },
           h('div', {},
             h('span', { class: 'pdv-label mb-0' }, 'Cliente'),
-            h('div', { class: 'pdv-customer' }, state.customer?.name ?? 'Não identificado')),
+            h('div', { class: 'pdv-customer' }, state.customer?.name ?? 'Não identificado'),
+            state.customer?.priceList?.active
+              ? h('div', { class: 'pdv-hint' }, `Tabela ${state.customer.priceList.name}`) : null),
           h('button', { class: 'pdv-btn', onclick: escolherCliente },
             h('span', { class: 'pdv-key' }, 'F4'), ' Trocar'))),
       painelCaixa(),

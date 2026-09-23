@@ -10,7 +10,7 @@ export const PERMISSIONS = [
   'dashboard.visualizar',
 
   'produto.visualizar', 'produto.criar', 'produto.editar', 'produto.excluir', 'produto.importar',
-  'categoria.gerenciar',
+  'categoria.gerenciar', 'tabela_preco.gerenciar',
 
   'estoque.visualizar', 'estoque.movimentar', 'estoque.entrada',
 

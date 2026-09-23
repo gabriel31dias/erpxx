@@ -8,12 +8,12 @@ const pad = (n: number) => String(n).padStart(2, '0');
 export const DT_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-export function nowIn(timezone = 'America/Sao_Paulo'): string {
+export function nowIn(timezone = 'America/Sao_Paulo', at = new Date()): string {
   return new Intl.DateTimeFormat('sv-SE', {
     timeZone: timezone,
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hour12: false,
-  }).format(new Date()).replace('T', ' ').slice(0, 16);
+  }).format(at).replace('T', ' ').slice(0, 16);
 }
 
 export const today = (timezone?: string) => nowIn(timezone).slice(0, 10);

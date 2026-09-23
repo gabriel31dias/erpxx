@@ -12,6 +12,7 @@ import {
 } from '../common/core';
 import { can } from '../common/rbac';
 import { StockService } from './stock';
+import { PricingModule, PricingService } from './pricing';
 import { fmtBRL, itemTotalCents, paging, roundQty } from '../common/util';
 
 export const SALE_STATUS = ['OPEN', 'COMPLETED', 'CANCELLED', 'REFUNDED'];
@@ -21,7 +22,10 @@ export class SaleItemDto {
   @IsString() productId!: string;
   @IsNumber() @Min(0.001) quantity!: number;
   @IsOptional() @IsInt() @Min(0) discountCents?: number;
-  /** Preço só é aceito para produto pesado/promoção com permissão de desconto. */
+  /**
+   * Preço que o front usou. Diferente do cadastro/tabela, só vale com permissão de
+   * desconto — ou em venda offline do app quando o preço mudou depois dela.
+   */
   @IsOptional() @IsInt() @Min(0) unitPriceCents?: number;
 }
 
@@ -67,6 +71,13 @@ export interface ExtSaleInfo {
   dueDate?: string; // vencimento da conta a receber ("YYYY-MM-DD"), quando fica pendente
 }
 
+/** Item já precificado, pronto para gravar (gross = preço × quantidade, antes do desconto). */
+interface PricedItem {
+  productId: string; name: string; unit: string; quantity: number;
+  unitPriceCents: number; basePriceCents: number; priceSource: string; unitCostCents: number;
+  discountCents: number; totalCents: number; gross: number;
+}
+
 export const SALE_INCLUDE = {
   customer: { select: { id: true, name: true, document: true, phone: true } },
   operator: { select: { id: true, name: true } },
@@ -96,6 +107,7 @@ export class SalesService {
     private plans: PlanService,
     private clock: TimeService,
     private idem: IdempotencyService,
+    private pricing: PricingService,
   ) {}
 
   async create(a: SaleActor, dto: SaleDto, ip?: string, soldAt?: string, ext?: ExtSaleInfo) {
@@ -107,62 +119,10 @@ export class SalesService {
     const at = soldAt ?? await this.clock.now(a.companyId);
     const settings = await this.settings.of(a.companyId);
 
-    // ----- itens: preço e custo vêm do cadastro, nunca do que o front mandou -----
-    const products = await this.db.product.findMany({
-      where: { companyId: a.companyId, deletedAt: null, id: { in: dto.items.map((i) => i.productId) } },
-    });
-    const byId = new Map(products.map((p) => [p.id, p]));
-
-    const items = dto.items.map((i) => {
-      const product = byId.get(i.productId);
-      if (!product) throw new NotFoundException('Produto da venda não existe mais.');
-      if (!product.active) throw new BadRequestException(`"${product.name}" está inativo.`);
-      const quantity = roundQty(i.quantity);
-      if (product.saleType === 'UNIT' && !Number.isInteger(quantity)) {
-        throw new BadRequestException(`"${product.name}" é vendido por unidade — quantidade inteira.`);
-      }
-      // preço diferente do cadastro exige permissão de desconto
-      let unitPrice = product.priceCents;
-      if (i.unitPriceCents !== undefined && i.unitPriceCents !== product.priceCents) {
-        if (!can(a.role, 'pdv.desconto')) {
-          throw new ForbiddenException(`Seu perfil não pode alterar o preço de "${product.name}".`);
-        }
-        unitPrice = i.unitPriceCents;
-      }
-      const discount = i.discountCents ?? 0;
-      const total = itemTotalCents(unitPrice, quantity, discount);
-      if (discount > Math.round(unitPrice * quantity)) {
-        throw new BadRequestException(`Desconto maior que o valor do item "${product.name}".`);
-      }
-      return {
-        productId: product.id, name: product.name, unit: product.unit, quantity,
-        unitPriceCents: unitPrice, unitCostCents: product.costCents,
-        discountCents: discount, totalCents: total,
-        gross: Math.round(unitPrice * quantity),
-      };
-    });
-
-    const subtotal = items.reduce((s, i) => s + i.gross, 0);
-    const itemDiscounts = items.reduce((s, i) => s + i.discountCents, 0);
-    const saleDiscount = dto.discountCents ?? 0;
-    const discountTotal = itemDiscounts + saleDiscount;
-    const total = subtotal - discountTotal;
-    if (total < 0) throw new BadRequestException('Desconto maior que o valor da venda.');
-
-    // desconto acima do teto do operador exige permissão
-    const pct = subtotal > 0 ? (discountTotal / subtotal) * 100 : 0;
-    if (pct > settings.maxDiscountPct && !can(a.role, 'pdv.desconto')) {
-      throw new ForbiddenException(
-        `Desconto de ${pct.toFixed(1)}% acima do limite de ${settings.maxDiscountPct}% do seu perfil.`);
-    }
+    const { items, subtotal, discountTotal, total, pct, priceListId, offlinePrices } =
+      await this.price(a, dto, at, ext);
     if (settings.requireCustomer && !dto.customerId) {
       throw new BadRequestException('Esta loja exige identificar o cliente na venda.');
-    }
-    if (dto.customerId) {
-      const customer = await this.db.customer.findFirst({
-        where: { id: dto.customerId, companyId: a.companyId, deletedAt: null },
-      });
-      if (!customer) throw new NotFoundException('Cliente não encontrado.');
     }
 
     // ----- pagamentos: soma tem que bater com o total -----
@@ -218,7 +178,8 @@ export class SalesService {
         const created = await tx.sale.create({
           data: {
             companyId: a.companyId, branchId, cashSessionId: session?.id ?? null,
-            customerId: dto.customerId || null, operatorId: a.userId, sellerId: a.sellerId, number, status: 'COMPLETED',
+            customerId: dto.customerId || null, priceListId,
+            operatorId: a.userId, sellerId: a.sellerId, number, status: 'COMPLETED',
             subtotalCents: subtotal, discountCents: discountTotal, totalCents: total,
             costTotalCents: items.reduce((s, i) => s + Math.round(i.unitCostCents * i.quantity), 0),
             receivedCents: receivedCash, changeCents: change,
@@ -278,11 +239,95 @@ export class SalesService {
     await this.audit.log(who, 'create', 'Sale', sale.id,
       { numero: sale.number, total, desconto: discountTotal, itens: items.length,
         ...(a.sellerId ? { vendedorExterno: a.sellerId } : {}) }, ip);
+    if (offlinePrices.length) {
+      await this.audit.log(who, 'price_divergence', 'Sale', sale.id,
+        { numero: sale.number, motivo: 'venda offline com preço anterior à mudança', itens: offlinePrices }, ip);
+    }
     if (discountTotal > 0) {
       await this.audit.log(who, 'discount', 'Sale', sale.id,
         { numero: sale.number, desconto: discountTotal, percentual: Number(pct.toFixed(2)) }, ip);
     }
     return { ...sale, changeCents: change };
+  }
+
+  /**
+   * Preço de cada item e totais da venda. O preço vem do servidor: cadastro, ou a
+   * tabela do cliente. O que o front manda só vale como alteração autorizada
+   * (permissão de desconto) ou, na venda offline do app, quando o preço mudou
+   * no servidor depois da venda — aí fica o preço do aparelho e a divergência
+   * vai para a auditoria. Usado também para cobrar o PIX antes de gravar a venda.
+   */
+  async price(a: SaleActor, dto: Pick<SaleDto, 'items' | 'customerId' | 'discountCents'>, at: string, ext?: ExtSaleInfo) {
+    if (dto.customerId) {
+      const customer = await this.db.customer.findFirst({
+        where: { id: dto.customerId, companyId: a.companyId, deletedAt: null },
+      });
+      if (!customer) throw new NotFoundException('Cliente não encontrado.');
+    }
+    const settings = await this.settings.of(a.companyId);
+    const products = await this.db.product.findMany({
+      where: { companyId: a.companyId, deletedAt: null, id: { in: dto.items.map((i) => i.productId) } },
+    });
+    const byId = new Map(products.map((p) => [p.id, p]));
+    const { priceList, prices } = await this.pricing.resolve(a.companyId, dto.customerId, products.map((p) => p.id));
+    const offlinePrices: Array<{ produto: string; aparelho: number; atual: number }> = [];
+
+    const items: PricedItem[] = [];
+    for (const i of dto.items) {
+      const product = byId.get(i.productId);
+      if (!product) throw new NotFoundException('Produto da venda não existe mais.');
+      if (!product.active) throw new BadRequestException(`"${product.name}" está inativo.`);
+      const quantity = roundQty(i.quantity);
+      if (product.saleType === 'UNIT' && !Number.isInteger(quantity)) {
+        throw new BadRequestException(`"${product.name}" é vendido por unidade — quantidade inteira.`);
+      }
+      const resolved = prices.get(product.id)!;
+      let unitPrice = resolved.priceCents;
+      let source: string = resolved.source;
+      if (i.unitPriceCents !== undefined && i.unitPriceCents !== resolved.priceCents) {
+        if (can(a.role, 'pdv.desconto')) {
+          source = 'MANUAL';
+        } else if (ext?.offline && await this.priceChangedAfter(a.companyId, product.id, dto.customerId, at)) {
+          source = 'OFFLINE';
+          offlinePrices.push({ produto: product.name, aparelho: i.unitPriceCents, atual: resolved.priceCents });
+        } else {
+          throw new ForbiddenException(`Seu perfil não pode alterar o preço de "${product.name}".`);
+        }
+        unitPrice = i.unitPriceCents;
+      }
+      const discount = i.discountCents ?? 0;
+      if (discount > Math.round(unitPrice * quantity)) {
+        throw new BadRequestException(`Desconto maior que o valor do item "${product.name}".`);
+      }
+      items.push({
+        productId: product.id, name: product.name, unit: product.unit, quantity,
+        unitPriceCents: unitPrice, basePriceCents: resolved.basePriceCents, priceSource: source,
+        unitCostCents: product.costCents,
+        discountCents: discount, totalCents: itemTotalCents(unitPrice, quantity, discount),
+        gross: Math.round(unitPrice * quantity),
+      });
+    }
+
+    // preço de tabela não é desconto: o teto vale sobre o que a tabela cobra
+    const subtotal = items.reduce((s, i) => s + i.gross, 0);
+    const itemDiscounts = items.reduce((s, i) => s + i.discountCents, 0);
+    const discountTotal = itemDiscounts + (dto.discountCents ?? 0);
+    const total = subtotal - discountTotal;
+    if (total < 0) throw new BadRequestException('Desconto maior que o valor da venda.');
+
+    // desconto acima do teto do operador exige permissão
+    const pct = subtotal > 0 ? (discountTotal / subtotal) * 100 : 0;
+    if (pct > settings.maxDiscountPct && !can(a.role, 'pdv.desconto')) {
+      throw new ForbiddenException(
+        `Desconto de ${pct.toFixed(1)}% acima do limite de ${settings.maxDiscountPct}% do seu perfil.`);
+    }
+    return { items, subtotal, discountTotal, total, pct, priceListId: priceList?.id ?? null, offlinePrices };
+  }
+
+  /** A origem do preço mudou no mesmo minuto da venda ou depois? (horário local da empresa) */
+  private async priceChangedAfter(companyId: string, productId: string, customerId: string | undefined, at: string) {
+    const changed = await this.pricing.lastChange(companyId, productId, customerId);
+    return !!changed && (await this.clock.now(companyId, changed)) >= at;
   }
 
   /** Sessão de caixa aberta do operador na filial (obrigatória para vender). */
@@ -503,7 +548,7 @@ export class SalesController {
 }
 
 @Module({
-  imports: [],
+  imports: [PricingModule],
   controllers: [SalesController],
   providers: [StockService, SalesService],
   exports: [SalesService],

@@ -664,6 +664,142 @@ async function main() {
     assert.equal((await outra('GET', `/api/sales/attachments/${att.id}/file`)).status, 404);
   });
 
+  // ---------- tabela de preço ----------
+  console.log('\nTabela de preço');
+  const caneta = (await api('POST', '/api/products', { name: 'Caneta', priceCents: 1000, costCents: 400, initialStock: 50 })).data;
+  const borracha = (await api('POST', '/api/products', { name: 'Borracha', priceCents: 500, costCents: 100, initialStock: 50 })).data;
+  const atacado = await api('POST', '/api/price-lists', { name: 'Atacado', adjustBp: -3000 });
+  const tabelaId = atacado.data.id;
+  await api('PUT', `/api/price-lists/${tabelaId}/items`, { items: [{ productId: caneta.id, priceCents: 650 }] });
+  const revenda = await api('POST', '/api/customers', { name: 'Papelaria Central', priceListId: tabelaId });
+  const clienteId = revenda.data.id;
+
+  await check('preço fixo do item vence; sem item, cadastro com o ajuste da tabela', async () => {
+    assert.equal(atacado.status, 201);
+    const t = await api('GET', `/api/price-lists/${tabelaId}`);
+    const row = (id: string) => t.data.rows.find((r: any) => r.id === id);
+    assert.equal(row(caneta.id).listPriceCents, 650);
+    assert.equal(row(caneta.id).fixedPriceCents, 650);
+    assert.equal(row(borracha.id).listPriceCents, 350); // 500 − 30%
+    assert.equal(t.data.customers[0].id, clienteId);
+  });
+
+  await check('PDV busca o produto já com o preço da tabela do cliente', async () => {
+    const r = await caixa('GET', `/api/products/lookup?q=Caneta&customerId=${clienteId}`);
+    assert.equal(r.data.rows[0].priceCents, 650);
+    assert.equal(r.data.rows[0].basePriceCents, 1000);
+    const semCliente = await caixa('GET', '/api/products/lookup?q=Caneta');
+    assert.equal(semCliente.data.rows[0].priceCents, 1000);
+  });
+
+  await check('caixa não cria tabela nem troca a tabela do cliente', async () => {
+    assert.equal((await caixa('POST', '/api/price-lists', { name: 'Amigos', adjustBp: -9000 })).status, 403);
+    assert.equal((await caixa('PUT', `/api/price-lists/${tabelaId}/items`, { items: [] })).status, 403);
+    const trocar = await caixa('PATCH', `/api/customers/${clienteId}`, { name: 'Papelaria Central', priceListId: null });
+    assert.equal(trocar.status, 403);
+    // editar o resto do cadastro continua liberado e não mexe na tabela
+    const editar = await caixa('PATCH', `/api/customers/${clienteId}`, { name: 'Papelaria Central Ltda' });
+    assert.equal(editar.status, 200);
+    assert.equal(editar.data.priceListId, tabelaId);
+  });
+
+  await check('venda com cliente cobra a tabela e não conta como desconto', async () => {
+    // −30% passaria do teto de desconto do caixa (10%) se fosse desconto
+    const r = await caixa('POST', '/api/sales', {
+      customerId: clienteId,
+      items: [{ productId: caneta.id, quantity: 2 }, { productId: borracha.id, quantity: 1 }],
+      payments: [{ paymentMethodId: pix.id, amountCents: 1650 }],
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.totalCents, 1650);
+    assert.equal(r.data.discountCents, 0);
+    assert.equal(r.data.priceListId, tabelaId);
+    const item = r.data.items.find((i: any) => i.productId === caneta.id);
+    assert.equal(item.unitPriceCents, 650);
+    assert.equal(item.basePriceCents, 1000);
+    assert.equal(item.priceSource, 'TABELA');
+  });
+
+  await check('preço de tabela sem cliente da tabela é bloqueado', async () => {
+    const r = await caixa('POST', '/api/sales', {
+      items: [{ productId: caneta.id, quantity: 1, unitPriceCents: 650 }],
+      payments: [{ paymentMethodId: pix.id, amountCents: 650 }],
+    });
+    assert.equal(r.status, 403);
+  });
+
+  await check('tabela de uma empresa não vale em outra', async () => {
+    assert.equal((await outra('GET', `/api/price-lists/${tabelaId}`)).status, 404);
+    const r = await outra('POST', '/api/customers', { name: 'Intruso', priceListId: tabelaId });
+    assert.equal(r.status, 400);
+  });
+
+  await check('app recebe preço base, tabelas completas e a tabela de cada cliente', async () => {
+    const produtos = await ext('GET', '/api/ext/products');
+    const p = produtos.data.rows.find((x: any) => x.id === caneta.id);
+    assert.equal(p.basePriceCents, 1000);
+    const tabelas = await ext('GET', '/api/ext/price-lists');
+    assert.equal(tabelas.status, 200);
+    assert.equal(tabelas.data.total, tabelas.data.rows.length);
+    const t = tabelas.data.rows.find((x: any) => x.id === tabelaId);
+    assert.equal(t.adjustBp, -3000);
+    assert.deepEqual(t.items, [{ productId: caneta.id, priceCents: 650 }]);
+    const clientes = await ext('GET', '/api/ext/customers');
+    assert.equal(clientes.data.rows.find((c: any) => c.id === clienteId).priceListId, tabelaId);
+  });
+
+  await check('app online: preço da tabela passa, preço inventado não', async () => {
+    const venda = (key: string, unitPriceCents: number) => ({
+      idempotencyKey: key, offline: false, paidInApp: true, appPaymentMethod: 'pix', customerId: clienteId,
+      items: [{ productId: caneta.id, quantity: 1, unitPriceCents }],
+      payments: [{ paymentMethodId: pixExt.id, amountCents: unitPriceCents }],
+    });
+    const r = await ext('POST', '/api/ext/sales/batch', { sales: [venda('tabela-0001', 650), venda('tabela-0002', 500)] });
+    assert.equal(r.data.results[0].ok, true, JSON.stringify(r.data.results[0]));
+    assert.equal(r.data.results[1].ok, false);
+    assert.equal(r.data.results[1].status, 403);
+  });
+
+  await check('app offline: preço antigo só é aceito se a tabela mudou depois da venda', async () => {
+    const antes = new Date('2026-01-01T00:00:00Z');
+    await db.product.update({ where: { id: caneta.id }, data: { updatedAt: antes } });
+    await db.customer.update({ where: { id: clienteId }, data: { updatedAt: antes } });
+    await db.priceList.update({ where: { id: tabelaId }, data: { updatedAt: antes } });
+    const offline = (key: string) => ({
+      idempotencyKey: key, soldAt: '2026-01-05 10:30', offline: true, paidInApp: true, appPaymentMethod: 'pix',
+      customerId: clienteId,
+      items: [{ productId: caneta.id, quantity: 1, unitPriceCents: 700 }],
+      payments: [{ paymentMethodId: pixExt.id, amountCents: 700 }],
+    });
+    const semMudanca = await ext('POST', '/api/ext/sales/batch', { sales: [offline('offline-0001')] });
+    assert.equal(semMudanca.data.results[0].status, 403);
+
+    await api('PUT', `/api/price-lists/${tabelaId}/items`, { items: [{ productId: caneta.id, priceCents: 600 }] });
+    const r = await ext('POST', '/api/ext/sales/batch', { sales: [offline('offline-0002')] });
+    assert.equal(r.data.results[0].ok, true, JSON.stringify(r.data.results[0]));
+    assert.equal(r.data.results[0].totalCents, 700);
+    const detalhe = await api('GET', `/api/sales/${r.data.results[0].saleId}`);
+    assert.equal(detalhe.data.sale.items[0].priceSource, 'OFFLINE');
+    const log = await db.auditLog.findFirst({ where: { action: 'price_divergence', entityId: r.data.results[0].saleId } });
+    assert.ok(log && log.data.includes('"atual":600'));
+  });
+
+  await check('PIX do app cobra o preço da tabela do cliente', async () => {
+    const r = await ext('POST', '/api/ext/sales/pix', {
+      idempotencyKey: 'pix-tabela-001', customerId: clienteId, items: [{ productId: borracha.id, quantity: 2 }],
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.totalCents, 700); // 2 × (500 − 30%)
+  });
+
+  await check('excluir a tabela devolve os clientes ao preço do cadastro', async () => {
+    assert.equal((await api('DELETE', `/api/price-lists/${tabelaId}`)).status, 200);
+    const r = await caixa('GET', `/api/products/lookup?q=Caneta&customerId=${clienteId}`);
+    assert.equal(r.data.rows[0].priceCents, 1000);
+    const c = await api('GET', `/api/customers/${clienteId}`);
+    assert.equal(c.data.customer.priceListId, null);
+  });
+
   await check('vendedor bloqueado perde o acesso na hora', async () => {
     await api('PATCH', `/api/sellers/${vendedor.data.id}`, {
       name: 'Carlos Rua', cpf: '52998224725', username: 'carlos.rua', active: false,

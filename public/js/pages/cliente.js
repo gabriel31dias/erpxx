@@ -10,6 +10,10 @@ export default async function render({ content, can }) {
   const data = id ? await get(`/customers/${id}`) : null;
   const c = data?.customer ?? {};
   const editavel = can('cliente.gerenciar');
+  // trocar a tabela muda o preço do cliente: só quem gerencia tabelas
+  const podeTabela = editavel && can('tabela_preco.gerenciar');
+  const tabelas = (await get('/price-lists').catch(() => ({ rows: [] }))).rows
+    .filter((t) => t.active || t.id === c.priceListId);
 
   const f = {
     name: input({ value: c.name ?? '', required: true }),
@@ -24,6 +28,10 @@ export default async function render({ content, can }) {
       { value: 'true', label: 'Ativo', selected: c.active !== false },
       { value: 'false', label: 'Inativo', selected: c.active === false },
     ]),
+    priceList: select([
+      { value: '', label: 'Preço do cadastro', selected: !c.priceListId },
+      ...tabelas.map((t) => ({ value: t.id, label: t.name, selected: t.id === c.priceListId })),
+    ], { disabled: !podeTabela }),
   };
 
   const salvar = h('button', { class: 'btn btn-primary', type: 'submit' }, id ? 'Salvar' : 'Cadastrar cliente');
@@ -35,6 +43,11 @@ export default async function render({ content, can }) {
     field('WhatsApp', f.whatsapp, { col: 'col-6 col-md-3' }),
     field('E-mail', f.email, { col: 'col-12 col-md-4' }),
     field('Situação', f.active, { col: 'col-6 col-md-2' }),
+    field('Tabela de preço', f.priceList, {
+      col: 'col-12 col-md-4',
+      help: podeTabela ? 'Preço que o cliente paga no PDV e no app dos vendedores.'
+        : 'Só gerente ou proprietário altera a tabela do cliente.',
+    }),
     field('Endereço', f.address, { col: 'col-12' }),
     field('Observações', f.notes, { col: 'col-12' }),
     h('div', { class: 'col-12 d-flex gap-2 justify-content-end' },
@@ -55,6 +68,7 @@ export default async function render({ content, can }) {
         address: f.address.value.trim() || undefined,
         notes: f.notes.value.trim() || undefined,
         active: f.active.value === 'true',
+        ...(podeTabela ? { priceListId: f.priceList.value || null } : {}),
       };
       const saved = id ? await patch(`/customers/${id}`, body) : await post('/customers', body);
       toast('Cliente salvo.');

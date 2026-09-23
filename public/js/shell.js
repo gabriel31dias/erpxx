@@ -14,7 +14,7 @@ export const branchId = () => ctx.branchId || '';
 const PARENT = {
   produto: 'produtos', categorias: 'produtos', importacao: 'produtos',
   entrada: 'estoque',
-  cliente: 'clientes', fornecedor: 'fornecedores',
+  cliente: 'clientes', fornecedor: 'fornecedores', 'tabela-preco': 'tabelas-preco',
   lancamento: 'financeiro', venda: 'vendas',
   sessoes: 'caixa', sessao: 'caixa',
   empresa: 'empresa', filiais: 'empresa', pagamentos: 'empresa',

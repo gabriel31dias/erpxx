@@ -1,5 +1,5 @@
 // Gerado por tools/genpages.js — arquivos que ficam no aparelho.
-self.CACHE_VERSION = 'a56d515e08';
+self.CACHE_VERSION = 'e68ff1a6f5';
 self.PRECACHE = [
   "/",
   "/aceitar-convite.html",
@@ -1047,6 +1047,7 @@ self.PRECACHE = [
   "/assets/svg/icon-sprite.svg#fill-home",
   "/assets/svg/icon-sprite.svg#fill-others",
   "/assets/svg/icon-sprite.svg#fill-social",
+  "/assets/svg/icon-sprite.svg#fill-table",
   "/assets/svg/icon-sprite.svg#fill-to-do",
   "/assets/svg/icon-sprite.svg#fill-user",
   "/assets/svg/icon-sprite.svg#notification-header",
@@ -1059,6 +1060,7 @@ self.PRECACHE = [
   "/assets/svg/icon-sprite.svg#stroke-home",
   "/assets/svg/icon-sprite.svg#stroke-others",
   "/assets/svg/icon-sprite.svg#stroke-social",
+  "/assets/svg/icon-sprite.svg#stroke-table",
   "/assets/svg/icon-sprite.svg#stroke-to-do",
   "/assets/svg/icon-sprite.svg#stroke-user",
   "/assinatura.html",
@@ -1125,6 +1127,8 @@ self.PRECACHE = [
   "/js/pages/sessao.js",
   "/js/pages/sessoes.js",
   "/js/pages/sincronizacao.js",
+  "/js/pages/tabela-preco.js",
+  "/js/pages/tabelas-preco.js",
   "/js/pages/usuarios.js",
   "/js/pages/venda.js",
   "/js/pages/vendas.js",
@@ -1148,6 +1152,8 @@ self.PRECACHE = [
   "/sessao.html",
   "/sessoes.html",
   "/sincronizacao.html",
+  "/tabela-preco.html",
+  "/tabelas-preco.html",
   "/usuarios.html",
   "/venda.html",
   "/vendas.html",

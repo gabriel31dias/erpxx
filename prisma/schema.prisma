@@ -137,6 +137,8 @@ model Company {
   bankTxs        BankTransaction[]
   costCenters    CostCenter[]
   fiscalDocs     FiscalDocument[]
+  priceLists     PriceList[]
+  priceListItems PriceListItem[]
   notifications  Notification[]
   auditLogs      AuditLog[]
   idempotency    IdempotencyKey[]
@@ -312,6 +314,7 @@ model Product {
   movements  StockMovement[]
   entryItems StockEntryItem[]
   saleItems  SaleItem[]
+  priceItems PriceListItem[]
 
   @@index([companyId, name])
   @@index([companyId, barcode])
@@ -444,12 +447,14 @@ model Customer {
   address   String?
   notes     String?
   active    Boolean   @default(true)
+  priceListId String? // tabela de preço do cliente; sem tabela = preço do cadastro
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
   company    Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  priceList  PriceList?     @relation(fields: [priceListId], references: [id])
   sales      Sale[]
   finEntries FinanceEntry[]
 
@@ -458,6 +463,49 @@ model Customer {
 }
 
 // ---------- Formas de pagamento ----------
+/**
+ * Tabela de preço: o cadastro do produto é sempre a base. Produto com item na
+ * tabela usa o preço fixo do item; sem item, a base com o ajuste da tabela.
+ * Uma tabela serve a vários clientes (Customer.priceListId).
+ */
+model PriceList {
+  id          String  @id @default(cuid())
+  companyId   String
+  name        String // "Atacado", "Revenda", "Funcionários"
+  description String?
+  adjustBp    Int     @default(0) // ajuste sobre o preço do cadastro: -1000 = -10%; 0 = sem ajuste
+  active      Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt // também sobe quando um item muda (conferência de venda offline)
+  deletedAt DateTime?
+
+  company   Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  items     PriceListItem[]
+  customers Customer[]
+  sales     Sale[]
+
+  @@index([companyId, active])
+}
+
+model PriceListItem {
+  id          String @id @default(cuid())
+  companyId   String
+  priceListId String
+  productId   String
+  priceCents  Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  priceList PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([priceListId, productId])
+  @@index([companyId, productId])
+}
+
 model PaymentMethod {
   id                String  @id @default(cuid())
   companyId         String
@@ -504,6 +552,7 @@ model Sale {
   receivedCents  Int     @default(0) // dinheiro entregue pelo cliente
   changeCents    Int     @default(0) // troco
   notes          String?
+  priceListId    String? // tabela aplicada (snapshot: o cliente pode trocar de tabela depois)
   cancelReason   String?
   cancelledById  String?
   cancelledAt    DateTime?
@@ -516,6 +565,7 @@ model Sale {
   branch   Branch       @relation(fields: [branchId], references: [id])
   session  CashSession? @relation(fields: [cashSessionId], references: [id])
   customer Customer?    @relation(fields: [customerId], references: [id])
+  priceList PriceList?  @relation(fields: [priceListId], references: [id])
   operator User?        @relation("operator", fields: [operatorId], references: [id])
   seller   Seller?      @relation(fields: [sellerId], references: [id])
 
@@ -542,6 +592,8 @@ model SaleItem {
   unit          String  @default("UN")
   quantity      Float
   unitPriceCents Int
+  basePriceCents Int?   // preço do cadastro no momento da venda
+  priceSource   String  @default("BASE") // BASE | TABELA | MANUAL | OFFLINE (preço do aparelho, tabela mudou depois)
   unitCostCents Int     @default(0)
   discountCents Int     @default(0)
   totalCents    Int

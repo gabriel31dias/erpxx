@@ -8,6 +8,7 @@ import { PRISMA, Db } from '../common/prisma.service';
 import { CurrentUser, Perms, SessionUser } from '../common/auth.guard';
 import { AuditService, BranchService, PlanService, TimeService } from '../common/core';
 import { paging } from '../common/util';
+import { PricingModule, PricingService } from './pricing';
 
 export const UNITS = ['UN', 'KG', 'G', 'L', 'ML', 'CX', 'PCT'];
 export const SALE_TYPES = ['UNIT', 'WEIGHT'];
@@ -64,6 +65,7 @@ export class ProductsController {
     private plans: PlanService,
     private branches: BranchService,
     private clock: TimeService,
+    private pricing: PricingService,
   ) {}
 
   /** Estoque do produto na filial pedida (ou soma de todas). */
@@ -134,13 +136,17 @@ export class ProductsController {
     return { rows: shaped, total, ...rest };
   }
 
-  /** Busca do PDV: código de barras exato primeiro, depois nome/SKU. */
+  /**
+   * Busca do PDV: código de barras exato primeiro, depois nome/SKU. Com `customerId`,
+   * `priceCents` já é o preço da tabela do cliente e `basePriceCents` o do cadastro.
+   */
   @Get('lookup')
   async lookup(
     @CurrentUser() u: SessionUser,
     @Query('q') q = '',
     @Query('branchId') branchId?: string,
     @Query('limit') limit = '15',
+    @Query('customerId') customerId?: string,
   ) {
     const term = q.trim();
     if (!term) return { rows: [] };
@@ -151,7 +157,7 @@ export class ProductsController {
       where: { ...base, OR: [{ barcode: term }, { sku: term }, { internalCode: term }] },
       include: { stocks: true },
     });
-    if (exact) return { rows: [this.shape(exact, scope.branchId)], exact: true };
+    if (exact) return { rows: await this.priced(u, [exact], scope.branchId, customerId), exact: true };
 
     const rows = await this.db.product.findMany({
       where: {
@@ -162,7 +168,18 @@ export class ProductsController {
       orderBy: { name: 'asc' },
       take: Math.min(Number(limit) || 15, 50),
     });
-    return { rows: rows.map((p) => this.shape(p, scope.branchId)), exact: false };
+    return { rows: await this.priced(u, rows, scope.branchId, customerId), exact: false };
+  }
+
+  private async priced(u: SessionUser, rows: any[], branchId?: string, customerId?: string) {
+    const { prices } = await this.pricing.resolve(u.companyId, customerId, rows.map((p) => p.id));
+    return rows.map((p) => {
+      const price = prices.get(p.id)!;
+      return {
+        ...this.shape(p, branchId),
+        priceCents: price.priceCents, basePriceCents: price.basePriceCents, priceSource: price.source,
+      };
+    });
   }
 
   @Get(':id')
@@ -347,5 +364,5 @@ export class CategoriesController {
   }
 }
 
-@Module({ controllers: [ProductsController, CategoriesController] })
+@Module({ imports: [PricingModule], controllers: [ProductsController, CategoriesController] })
 export class CatalogModule {}

@@ -77,5 +77,6 @@ export async function api(path, { method = 'GET', body, query, raw } = {}) {
 export const get = (path, query) => api(path, { query });
 export const post = (path, body) => api(path, { method: 'POST', body });
 export const patch = (path, body) => api(path, { method: 'PATCH', body });
+export const put = (path, body) => api(path, { method: 'PUT', body });
 export const del = (path) => api(path, { method: 'DELETE' });
 export const getText = (path, query) => api(path, { query, raw: true });
