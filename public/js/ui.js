@@ -233,13 +233,15 @@ export const statusBadge = (label, kind) =>
 
 /** Card de indicador do dashboard. */
 export function statCard(label, value, { hint, iconName = 'trending-up', color = '#7366ff', col = 'col-6 col-xl-3' } = {}) {
-  return h('div', { class: col },
-    h('div', { class: 'card mb-3' }, h('div', { class: 'card-body p-3 d-flex align-items-center gap-3' },
+  // coluna flex + card w-100: todos os cards da linha com a mesma altura; a linha
+  // de detalhe existe sempre (vazia quando não há) para linhas diferentes também baterem
+  return h('div', { class: `${col} d-flex` },
+    h('div', { class: 'card mb-3 w-100 lf-stat' }, h('div', { class: 'card-body p-3 d-flex align-items-center gap-3' },
       h('div', { class: 'lf-stat-icon', style: `background:${color}1f;color:${color}` }, icon(iconName, 18)),
       h('div', { class: 'flex-grow-1 min-w-0' },
         h('div', { class: 'lf-stat-label' }, label),
         h('div', { class: 'lf-stat-value' }, value),
-        hint ? h('div', { class: 'lf-stat-hint' }, hint) : null))));
+        h('div', { class: 'lf-stat-hint' }, hint || '\u00a0')))));
 }
 
 /** Gráfico do ApexCharts com fallback quando a lib não carregou (offline). */
