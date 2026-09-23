@@ -129,7 +129,7 @@ async function main() {
   await db.paymentMethod.createMany({
     data: [
       ...DEFAULT_PAYMENT_METHODS.map((m) => ({ ...m, companyId: company.id })),
-      { companyId: company.id, name: 'Vale alimentação', type: 'vale', sortOrder: 5 },
+      { companyId: company.id, name: 'Vale alimentação', type: 'vale', sortOrder: 6 },
     ],
   });
   const methods = await db.paymentMethod.findMany({ where: { companyId: company.id } });

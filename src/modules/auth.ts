@@ -1,6 +1,6 @@
 import {
-  BadRequestException, Body, ConflictException, Controller, Get, Inject, Injectable, Module,
-  Post, Req, Res, UnauthorizedException,
+  BadRequestException, Body, ConflictException, Controller, Get, Inject, Injectable, Logger, Module,
+  OnApplicationBootstrap, Post, Req, Res, UnauthorizedException,
 } from '@nestjs/common';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { Throttle } from '@nestjs/throttler';
@@ -58,7 +58,25 @@ export const DEFAULT_PAYMENT_METHODS = [
   { name: 'PIX', type: 'pix', sortOrder: 2 },
   { name: 'Cartão de débito', type: 'debito', sortOrder: 3 },
   { name: 'Cartão de crédito', type: 'credito', allowsInstallments: true, maxInstallments: 12, sortOrder: 4 },
+  { name: 'Crediário', type: 'crediario', allowsInstallments: true, maxInstallments: 10, sortOrder: 5 },
 ];
+
+/**
+ * Garante as formas padrão em toda empresa (as criadas antes de uma forma virar
+ * padrão também recebem). Tipo que a empresa já teve — mesmo excluído ou
+ * inativo — não volta: foi decisão da loja.
+ */
+export async function ensureDefaultPaymentMethods(db: Db) {
+  const companies = await db.company.findMany({
+    where: { deletedAt: null }, select: { id: true, paymentMethods: { select: { type: true } } },
+  });
+  const data = companies.flatMap((c) => {
+    const has = new Set(c.paymentMethods.map((m) => m.type));
+    return DEFAULT_PAYMENT_METHODS.filter((m) => !has.has(m.type)).map((m) => ({ ...m, companyId: c.id }));
+  });
+  if (data.length) await db.paymentMethod.createMany({ data });
+  return data.length;
+}
 
 export const DEFAULT_FINANCIAL_CATEGORIES = [
   { name: 'Vendas', type: 'RECEITA' },
@@ -335,4 +353,11 @@ export class AuthController {
   providers: [AuthService],
   exports: [AuthService],
 })
-export class AuthModule {}
+export class AuthModule implements OnApplicationBootstrap {
+  constructor(@Inject(PRISMA) private db: Db) {}
+
+  async onApplicationBootstrap() {
+    const created = await ensureDefaultPaymentMethods(this.db);
+    if (created) new Logger('LojaFlow').log(`Formas de pagamento padrão criadas: ${created}`);
+  }
+}

@@ -1068,7 +1068,8 @@ async function boot() {
   if (state.me.company.theme === 'dark') document.body.classList.add('dark-only');
 
   const { rows } = await get('/company/payment-methods');
-  state.methods = rows.filter((m) => m.active);
+  const crediario = state.me.company.plan?.features?.includes('crediario');
+  state.methods = rows.filter((m) => m.active && (crediario || m.type !== 'crediario'));
 
   document.addEventListener('keydown', atalhos);
   window.addEventListener('online', async () => {

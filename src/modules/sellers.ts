@@ -396,7 +396,7 @@ export class ExtController {
     };
   }
 
-  /** Formas de pagamento aceitas no lote de vendas. */
+  /** Formas de pagamento aceitas no lote de vendas (crediário só se o plano da loja incluir). */
   @Get('payment-methods')
   async paymentMethods(@CurrentSeller() s: SellerSession) {
     const rows = await this.db.paymentMethod.findMany({
@@ -404,7 +404,8 @@ export class ExtController {
       orderBy: { sortOrder: 'asc' },
       select: { id: true, name: true, type: true, requiresChange: true, allowsInstallments: true, maxInstallments: true },
     });
-    return { rows };
+    const crediario = await this.credit.enabled(s.companyId);
+    return { rows: rows.filter((m) => crediario || m.type !== 'crediario') };
   }
 
   /** Vendas do próprio vendedor, paginadas (uso online). */

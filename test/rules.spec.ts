@@ -802,9 +802,29 @@ async function main() {
 
   // ---------- crediário ----------
   console.log('\nCrediário');
-  const crediario = (await api('POST', '/api/company/payment-methods', {
-    name: 'Crediário', type: 'crediario', allowsInstallments: true, maxInstallments: 10,
-  })).data;
+  const crediario = (await api('GET', '/api/company/payment-methods')).data.rows
+    .find((m: any) => m.type === 'crediario');
+
+  await check('toda empresa nasce com a forma Crediário', () => {
+    assert.ok(crediario, 'sem forma crediário');
+    assert.equal(crediario.allowsInstallments, true);
+  });
+
+  await check('empresa antiga recebe o Crediário; excluído pela loja não volta', async () => {
+    const { ensureDefaultPaymentMethods } = await import('../src/modules/auth');
+    const concorrente = await db.company.findFirstOrThrow({ where: { name: 'Concorrente' } });
+    await db.paymentMethod.deleteMany({ where: { companyId: concorrente.id, type: 'crediario' } }); // como antes da mudança
+    await ensureDefaultPaymentMethods(db as any);
+    assert.equal(await db.paymentMethod.count({ where: { companyId: concorrente.id, type: 'crediario' } }), 1);
+    await db.paymentMethod.updateMany({ where: { companyId: concorrente.id, type: 'crediario' }, data: { deletedAt: new Date() } });
+    await ensureDefaultPaymentMethods(db as any);
+    assert.equal(await db.paymentMethod.count({ where: { companyId: concorrente.id, type: 'crediario' } }), 1);
+  });
+
+  await check('app não recebe o Crediário se o plano não inclui', async () => {
+    const metodosApp = (await ext('GET', '/api/ext/payment-methods')).data.rows;
+    assert.ok(!metodosApp.some((m: any) => m.type === 'crediario'));
+  });
   const joana = (await api('POST', '/api/customers', { name: 'Joana Prado' })).data;
   const vendaCrediario = (valor: number, parcelas = 1, extra: any = {}) => ({
     customerId: joana.id,
