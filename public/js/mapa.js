@@ -17,8 +17,10 @@ const INICIO = [-23.5505, -46.6333];
 
 export function criarMapa(el, { zoom = 12 } = {}) {
   const map = window.L.map(el, { zoomControl: true }).setView(INICIO, zoom);
-  window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '&copy; OpenStreetMap',
+  // O OSM bloqueia tile sem Referer ("Access blocked"); a página usa Referrer-Policy
+  // same-origin, então os tiles liberam só a origem (sem caminho nem query).
+  window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap', referrerPolicy: 'strict-origin-when-cross-origin',
   }).addTo(map);
   // o mapa nasce dentro de card ainda sem tamanho final
   setTimeout(() => map.invalidateSize(), 200);
