@@ -37,6 +37,8 @@ class SettingsDto {
   @IsOptional() @IsInt() @Min(0) sangriaApprovalCents?: number;
   @IsOptional() @IsInt() @Min(0) decimals?: number;
   @IsOptional() @IsString() receiptFooter?: string;
+  @IsOptional() @IsInt() @Min(1) crediarioIntervalDays?: number;
+  @IsOptional() @IsInt() @Min(0) crediarioGraceDays?: number;
 }
 
 class PixConfigDto {

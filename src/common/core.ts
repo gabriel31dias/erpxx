@@ -67,6 +67,8 @@ export const DEFAULT_SETTINGS = {
   sangriaApprovalCents: 50000, // acima disso, exige perfil gerente/admin
   receiptFooter: 'Obrigado pela preferência! Este documento não tem valor fiscal.',
   extSellerPix: true, // app do vendedor externo gera cobrança PIX no gateway
+  crediarioIntervalDays: 30, // dias entre a venda e cada parcela do crediário
+  crediarioGraceDays: 0, // atraso tolerado antes de barrar nova compra no crediário
 };
 export type Settings = typeof DEFAULT_SETTINGS;
 

@@ -18,6 +18,7 @@ import { AuditService, BranchService, IdempotencyService, SettingsService, TimeS
 import { DATE_RE, DT_RE, isCpf, onlyDigits, paging } from '../common/util';
 import { SALE_INCLUDE, SaleItemDto, SalePaymentDto, SalesModule, SalesService } from './sales';
 import { PaymentsModule, PixGateway } from './payments';
+import { CreditModule, CreditService, CreditStatus } from './credit';
 import { AttachmentsModule, AttachmentsService, RECEIPT_UPLOAD, UploadFile } from './attachments';
 
 const USERNAME_RE = /^[a-z0-9._-]{3,40}$/;
@@ -260,6 +261,7 @@ export class ExtController {
     private audit: AuditService,
     private settings: SettingsService,
     private attachments: AttachmentsService,
+    private credit: CreditService,
   ) {}
 
   /** PIX pelo app: ligado nas configurações da loja e com o gateway configurado. */
@@ -336,7 +338,11 @@ export class ExtController {
     return { total: rows.length, rows };
   }
 
-  /** Todos os clientes ativos, sem paginação. `priceListId` diz a tabela de preço do cliente. */
+  /**
+   * Todos os clientes ativos, sem paginação. `priceListId` diz a tabela de preço;
+   * `credit` é a foto do crediário no momento do download (o app mostra, mas a
+   * decisão é do servidor na hora da venda — use GET customers/:id/credit antes de vender).
+   */
   @Get('customers')
   async customers(@CurrentSeller() s: SellerSession) {
     const rows = await this.db.customer.findMany({
@@ -347,7 +353,47 @@ export class ExtController {
         birthdate: true, address: true, priceListId: true, updatedAt: true,
       },
     });
-    return { total: rows.length, rows };
+    const credit = await this.credit.statusOf(s.companyId, rows.map((c) => c.id));
+    return {
+      total: rows.length,
+      rows: rows.map((c) => ({ ...c, credit: this.creditView(credit.get(c.id)!) })),
+    };
+  }
+
+  /**
+   * Crediário do cliente agora: limite, usado, disponível, atraso, parcelas em
+   * aberto e se o vendedor pode vender no crediário (vendedor não tem liberação:
+   * qualquer motivo em `reasons` faz a venda ser recusada).
+   */
+  @Get('customers/:id/credit')
+  async customerCredit(@CurrentSeller() s: SellerSession, @Param('id') id: string) {
+    const customer = await this.db.customer.findFirst({
+      where: { id, companyId: s.companyId, deletedAt: null, active: true }, select: { id: true },
+    });
+    if (!customer) throw new NotFoundException('Cliente não encontrado.');
+    const [status, installments, enabled] = await Promise.all([
+      this.credit.status(s.companyId, id),
+      this.credit.openInstallments(s.companyId, id),
+      this.credit.enabled(s.companyId),
+    ]);
+    const reasons = enabled ? (await this.credit.check(s.companyId, id, 0)).reasons : ['O crediário não está incluído no plano da loja.'];
+    return {
+      ...this.creditView(status),
+      canSell: reasons.length === 0,
+      reasons,
+      installments: installments.map((i) => ({
+        id: i.id, saleNumber: i.sale?.number ?? null, description: i.description, amountCents: i.amountCents,
+        dueDate: i.dueDate, installmentNo: i.installmentNo, installmentOf: i.installmentOf, instrument: i.instrument,
+      })),
+    };
+  }
+
+  private creditView(c: CreditStatus) {
+    return {
+      limitCents: c.limitCents, usedCents: c.usedCents, availableCents: c.availableCents,
+      status: c.status, blockReason: c.blockReason,
+      overdueCount: c.overdue.count, overdueCents: c.overdue.amountCents, overdueDays: c.overdue.days,
+    };
   }
 
   /** Formas de pagamento aceitas no lote de vendas. */
@@ -541,7 +587,7 @@ export class ExtController {
 }
 
 @Module({
-  imports: [SalesModule, PaymentsModule, AttachmentsModule],
+  imports: [SalesModule, PaymentsModule, AttachmentsModule, CreditModule],
   controllers: [SellersController, ExtAuthController, ExtController],
   providers: [SellerGuard],
 })

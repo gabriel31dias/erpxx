@@ -15,6 +15,8 @@ export const PERMISSIONS = [
   'estoque.visualizar', 'estoque.movimentar', 'estoque.entrada',
 
   'cliente.visualizar', 'cliente.gerenciar',
+  'credito.gerenciar', // limite e bloqueio do crediário do cliente
+  'credito.liberar', // vender no crediário acima do limite / cliente bloqueado ou em atraso
   'fornecedor.visualizar', 'fornecedor.gerenciar',
 
   'pdv.acessar', 'pdv.desconto', 'pdv.cancelar_item', 'pdv.cancelar_venda',
@@ -45,7 +47,7 @@ const ESTOQUISTA: Permission[] = [
 
 const FINANCEIRO: Permission[] = [
   'dashboard.visualizar', 'produto.visualizar', 'estoque.visualizar',
-  'cliente.visualizar', 'fornecedor.visualizar', 'venda.visualizar',
+  'cliente.visualizar', 'credito.gerenciar', 'fornecedor.visualizar', 'venda.visualizar',
   'caixa.visualizar', 'financeiro.visualizar', 'financeiro.gerenciar',
   'relatorio.visualizar', 'relatorio.exportar',
 ];

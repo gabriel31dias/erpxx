@@ -2,7 +2,8 @@
 import { get, patch, post } from '../api.js';
 import { pageTitle } from '../shell.js';
 import { mount,
-  card, field, fmtBRL, fmtDate, h, input, refreshIcons, select, statCard, textarea, toast,
+  card, centsToInput, field, fmtBRL, fmtDate, h, input, moneyInput, moneyToCents, refreshIcons, select, statCard,
+  textarea, toast, todayStr,
 } from '../ui.js';
 
 export default async function render({ content, can }) {
@@ -100,10 +101,75 @@ export default async function render({ content, can }) {
             h('a', { class: 'btn btn-sm btn-outline-secondary', href: `/venda.html?id=${s.id}` }, 'Abrir')))))))
     : h('p', { class: 'txt-secondary mb-0' }, 'Este cliente ainda não comprou.')) : null;
 
+  const credito = id ? await blocoCredito(id, can('credito.gerenciar')) : null;
+
   mount(content,
     pageTitle(id ? c.name : 'Novo cliente'),
     stats,
     card('Dados do cliente', form),
+    credito,
     historico);
   refreshIcons(content);
+}
+
+/** Crediário: limite, uso, atraso e parcelas em aberto; quem tem credito.gerenciar edita. */
+async function blocoCredito(id, editavel) {
+  const box = h('div', {});
+  const desenhar = (cr) => {
+    const situacao = cr.limitCents === null ? h('span', { class: 'badge text-bg-secondary' }, 'Sem crediário')
+      : cr.status === 'BLOQUEADO' ? h('span', { class: 'badge text-bg-danger' }, `Bloqueado${cr.blockReason ? ` · ${cr.blockReason}` : ''}`)
+      : cr.overdue.count ? h('span', { class: 'badge text-bg-warning' }, `${cr.overdue.count} parcela(s) em atraso`)
+      : h('span', { class: 'badge text-bg-success' }, 'Liberado');
+
+    const resumo = h('div', { class: 'row g-3 mb-3' },
+      ...[['Limite', cr.limitCents === null ? '—' : fmtBRL(cr.limitCents)], ['Em aberto', fmtBRL(cr.usedCents)],
+        ['Disponível', cr.limitCents === null ? '—' : fmtBRL(cr.availableCents)],
+        ['Em atraso', cr.overdue.count ? `${fmtBRL(cr.overdue.amountCents)} · ${cr.overdue.days} dia(s)` : '—']]
+        .map(([rotulo, valor]) => h('div', { class: 'col-6 col-md-3' },
+          h('div', { class: 'f-12 txt-secondary' }, rotulo), h('div', { class: 'f-w-600 lf-num' }, valor))));
+
+    let form = null;
+    if (editavel) {
+      const limite = moneyInput({ value: cr.limitCents === null ? '' : centsToInput(cr.limitCents), placeholder: 'sem crediário' });
+      const status = select([
+        { value: 'LIBERADO', label: 'Liberado', selected: cr.status !== 'BLOQUEADO' },
+        { value: 'BLOQUEADO', label: 'Bloqueado', selected: cr.status === 'BLOQUEADO' },
+      ]);
+      const motivo = input({ value: cr.blockReason ?? '', placeholder: 'Ex.: cheque devolvido' });
+      const salvar = h('button', { class: 'btn btn-outline-primary', type: 'submit' }, 'Salvar crédito');
+      form = h('form', { class: 'row g-3 align-items-end mb-3' },
+        field('Limite de crédito', limite, { col: 'col-6 col-md-3', help: 'Vazio = cliente sem crediário.' }),
+        field('Situação', status, { col: 'col-6 col-md-3' }),
+        field('Motivo do bloqueio', motivo, { col: 'col-12 col-md-4' }),
+        h('div', { class: 'col-12 col-md-2 text-end' }, salvar));
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        salvar.disabled = true;
+        try {
+          desenhar(await patch(`/customers/${id}/credit`, {
+            creditLimitCents: limite.value.trim() === '' ? null : moneyToCents(limite.value),
+            creditStatus: status.value, creditBlockReason: motivo.value.trim() || undefined,
+          }));
+          toast('Crédito do cliente salvo.');
+        } catch (err) { toast(err.message, 'error'); } finally { salvar.disabled = false; }
+      };
+    }
+
+    const parcelas = cr.installments.length
+      ? h('div', { class: 'table-responsive' }, h('table', { class: 'table table-sm align-middle mb-0' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Vencimento'), h('th', {}, 'Descrição'), h('th', { class: 'text-end' }, 'Valor'))),
+        h('tbody', {}, cr.installments.map((i) => h('tr', {},
+          h('td', { class: i.dueDate < todayStr() ? 'text-danger f-w-600' : '' }, fmtDate(i.dueDate)),
+          h('td', {}, i.saleId ? h('a', { href: `/venda.html?id=${i.saleId}` }, i.description) : i.description),
+          h('td', { class: 'text-end lf-num' }, fmtBRL(i.amountCents)))))))
+      : h('p', { class: 'txt-secondary mb-0' }, 'Nenhuma conta em aberto.');
+
+    box.replaceChildren(card('Crediário', h('div', {}, resumo, form, h('h6', { class: 'mb-2' }, 'Em aberto'), parcelas), situacao));
+  };
+  try {
+    desenhar(await get(`/customers/${id}/credit`));
+  } catch {
+    return null; // sem o crédito, a ficha continua funcionando
+  }
+  return box;
 }

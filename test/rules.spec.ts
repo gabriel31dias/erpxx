@@ -8,7 +8,7 @@ process.env.JWT_SECRET = 'test-secret';
 process.env.NODE_ENV = 'test';
 process.env.PLAN_BASICO_LIMITS = '3,1,1,500';
 process.env.PLAN_PRO_LIMITS = '10,2,3,5000';
-process.env.PLAN_PRO_FEATURES = 'relatorios.basico,export,importacao';
+process.env.PLAN_PRO_FEATURES = 'relatorios.basico,export,importacao,crediario';
 // gateway PIX falso (sobe no main) — nunca chama a Blue de verdade
 process.env.PIX_API_BASE = 'http://127.0.0.1:47811';
 process.env.UPLOADS_DIR = require('path').join(__dirname, '..', 'data', 'test-uploads');
@@ -22,7 +22,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import cookieParser = require('cookie-parser');
 import { PrismaClient } from '@prisma/client';
-import { itemTotalCents, periodRange, roundQty, toCsv, addMonths } from '../src/common/util';
+import { itemTotalCents, periodRange, roundQty, toCsv, addDays, addMonths } from '../src/common/util';
 
 let failures = 0;
 function check(name: string, fn: () => void | Promise<void>) {
@@ -798,6 +798,146 @@ async function main() {
     assert.equal(r.data.rows[0].priceCents, 1000);
     const c = await api('GET', `/api/customers/${clienteId}`);
     assert.equal(c.data.customer.priceListId, null);
+  });
+
+  // ---------- crediário ----------
+  console.log('\nCrediário');
+  const crediario = (await api('POST', '/api/company/payment-methods', {
+    name: 'Crediário', type: 'crediario', allowsInstallments: true, maxInstallments: 10,
+  })).data;
+  const joana = (await api('POST', '/api/customers', { name: 'Joana Prado' })).data;
+  const vendaCrediario = (valor: number, parcelas = 1, extra: any = {}) => ({
+    customerId: joana.id,
+    items: [{ productId: caneta.id, quantity: valor / 1000 }],
+    payments: [{ paymentMethodId: crediario.id, amountCents: valor, installments: parcelas }],
+    ...extra,
+  });
+
+  await check('plano sem crediário recusa a venda', async () => {
+    const r = await caixa('POST', '/api/sales', vendaCrediario(1000));
+    assert.equal(r.status, 400);
+    assert.ok(/plano/.test(r.data.message));
+  });
+
+  const empresaTeste = await db.company.findFirstOrThrow({ where: { name: 'Loja Teste' } });
+  const planoPro = await db.plan.findUniqueOrThrow({ where: { code: 'pro' } });
+  await db.company.update({ where: { id: empresaTeste.id }, data: { planId: planoPro.id } });
+
+  await check('cliente sem limite aprovado não compra no crediário', async () => {
+    const r = await caixa('POST', '/api/sales', vendaCrediario(1000));
+    assert.equal(r.status, 403);
+    assert.ok(/sem crediário aprovado/.test(r.data.message));
+  });
+
+  await check('caixa não define limite; gerente sim', async () => {
+    assert.equal((await caixa('PATCH', `/api/customers/${joana.id}/credit`, { creditLimitCents: 999999 })).status, 403);
+    const r = await api('PATCH', `/api/customers/${joana.id}/credit`, { creditLimitCents: 5000 });
+    assert.equal(r.status, 200);
+    assert.equal(r.data.availableCents, 5000);
+  });
+
+  const mista = await caixa('POST', '/api/sales', {
+    customerId: joana.id,
+    items: [{ productId: caneta.id, quantity: 4 }],
+    payments: [
+      { paymentMethodId: pix.id, amountCents: 1000 },
+      { paymentMethodId: crediario.id, amountCents: 3000, installments: 3 },
+    ],
+  });
+
+  await check('venda mista: à vista recebido, crediário vira parcelas mensais', async () => {
+    assert.equal(mista.status, 201, JSON.stringify(mista.data));
+    const lanc = await db.financeEntry.findMany({ where: { saleId: mista.data.id }, orderBy: { dueDate: 'asc' } });
+    const vista = lanc.filter((l) => !l.installmentGroup);
+    const parcelas = lanc.filter((l) => l.installmentGroup);
+    assert.equal(vista.length, 1);
+    assert.equal(vista[0].amountCents, 1000);
+    assert.equal(vista[0].status, 'paid');
+    assert.deepEqual(parcelas.map((p) => [p.installmentNo, p.amountCents, p.status]),
+      [[1, 1000, 'pending'], [2, 1000, 'pending'], [3, 1000, 'pending']]);
+    const dia = mista.data.soldAt.slice(0, 10);
+    assert.equal(parcelas[0].dueDate, addDays(dia, 30));
+    assert.equal(parcelas[2].dueDate, addDays(dia, 90));
+    assert.ok(parcelas.every((p) => p.customerId === joana.id));
+  });
+
+  await check('parcelas ocupam o limite do cliente', async () => {
+    const c = await caixa('GET', `/api/customers/${joana.id}/credit`);
+    assert.equal(c.data.usedCents, 3000);
+    assert.equal(c.data.availableCents, 2000);
+    assert.equal(c.data.installments.length, 3);
+  });
+
+  await check('acima do limite: caixa é barrado, gerente libera com auditoria', async () => {
+    const barrada = await caixa('POST', '/api/sales', vendaCrediario(3000, 2));
+    assert.equal(barrada.status, 403);
+    assert.ok(/Limite disponível R\$\s?20,00/.test(barrada.data.message), barrada.data.message);
+    const liberada = await api('POST', '/api/sales', vendaCrediario(3000, 2));
+    assert.equal(liberada.status, 201, JSON.stringify(liberada.data));
+    const log = await db.auditLog.findFirst({ where: { action: 'credit_override', entityId: liberada.data.id } });
+    assert.ok(log && log.data.includes('Limite disponível'));
+  });
+
+  await check('app vê o crediário do cliente e o motivo de não poder vender', async () => {
+    const lista = await ext('GET', '/api/ext/customers');
+    const c = lista.data.rows.find((x: any) => x.id === joana.id).credit;
+    assert.equal(c.limitCents, 5000);
+    assert.equal(c.usedCents, 6000);
+    assert.equal(c.availableCents, 0);
+    const r = await ext('GET', `/api/ext/customers/${joana.id}/credit`);
+    assert.equal(r.status, 200);
+    assert.equal(r.data.canSell, false);
+    assert.equal(r.data.installments.length, 5);
+    assert.equal(r.data.installments[0].saleNumber, mista.data.number);
+    assert.equal((await ext('GET', `/api/ext/customers/${clienteId}/credit`)).data.canSell, false); // sem limite
+  });
+
+  await check('parcela em atraso barra nova compra', async () => {
+    await api('PATCH', `/api/customers/${joana.id}/credit`, { creditLimitCents: 100000 });
+    const primeira = await db.financeEntry.findFirstOrThrow({ where: { saleId: mista.data.id, installmentNo: 1 } });
+    await db.financeEntry.update({ where: { id: primeira.id }, data: { dueDate: '2026-01-10' } });
+    const r = await ext('GET', `/api/ext/customers/${joana.id}/credit`);
+    assert.equal(r.data.overdueCount, 1);
+    assert.ok(r.data.overdueDays > 30);
+    assert.ok(r.data.reasons.some((m: string) => /atraso/.test(m)));
+    const venda = await caixa('POST', '/api/sales', vendaCrediario(1000));
+    assert.equal(venda.status, 403);
+    await db.financeEntry.update({ where: { id: primeira.id }, data: { dueDate: primeira.dueDate } });
+  });
+
+  await check('app: bloqueado e offline não vendem no crediário; liberado vende', async () => {
+    const metodosApp = (await ext('GET', '/api/ext/payment-methods')).data.rows;
+    const credApp = metodosApp.find((m: any) => m.type === 'crediario');
+    const venda = (key: string, extra: any = {}) => ({
+      idempotencyKey: key, offline: false, paidInApp: false, customerId: joana.id,
+      items: [{ productId: caneta.id, quantity: 1 }],
+      payments: [{ paymentMethodId: credApp.id, amountCents: 1000, installments: 2 }], ...extra,
+    });
+    await api('PATCH', `/api/customers/${joana.id}/credit`, { creditStatus: 'BLOQUEADO', creditBlockReason: 'cheque devolvido' });
+    const bloqueado = await ext('POST', '/api/ext/sales/batch', { sales: [venda('cred-0001')] });
+    assert.equal(bloqueado.data.results[0].status, 403);
+    assert.ok(/cheque devolvido/.test(bloqueado.data.results[0].error));
+
+    await api('PATCH', `/api/customers/${joana.id}/credit`, { creditStatus: 'LIBERADO' });
+    const offline = await ext('POST', '/api/ext/sales/batch', { sales: [venda('cred-0002', { offline: true })] });
+    assert.equal(offline.data.results[0].status, 400);
+    const ok = await ext('POST', '/api/ext/sales/batch', { sales: [venda('cred-0003')] });
+    assert.equal(ok.data.results[0].ok, true, JSON.stringify(ok.data.results[0]));
+    const parcelas = await db.financeEntry.count({ where: { saleId: ok.data.results[0].saleId, installmentGroup: { not: null } } });
+    assert.equal(parcelas, 2);
+  });
+
+  await check('venda com parcela recebida não pode ser cancelada', async () => {
+    const parcela = await db.financeEntry.findFirstOrThrow({ where: { saleId: mista.data.id, installmentNo: 1 } });
+    assert.equal((await api('POST', `/api/finance/entries/${parcela.id}/pay`, { instrument: 'pix' })).status, 201);
+    const r = await api('POST', `/api/sales/${mista.data.id}/cancel`, { reason: 'Cliente desistiu' });
+    assert.equal(r.status, 400);
+    assert.ok(/parcela/.test(r.data.message));
+  });
+
+  await check('crediário de uma empresa não aparece em outra', async () => {
+    assert.equal((await outra('GET', `/api/customers/${joana.id}/credit`)).status, 404);
+    assert.equal((await outra('PATCH', `/api/customers/${joana.id}/credit`, { creditLimitCents: 1 })).status, 404);
   });
 
   await check('vendedor bloqueado perde o acesso na hora', async () => {

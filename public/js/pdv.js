@@ -187,8 +187,24 @@ async function escolherCliente() {
 /** Troca o cliente e reprecifica o cupom pela tabela dele (ou volta ao cadastro). */
 function definirCliente(c) {
   state.customer = c;
+  state.credit = null;
   render();
   reprecificar();
+  if (c) {
+    get(`/customers/${c.id}/credit`)
+      .then((cr) => { if (state.customer?.id === c.id) { state.credit = cr; render(); } })
+      .catch(() => {}); // sem rede: o PDV só não mostra o crédito
+  }
+}
+
+/** Linha de crediário do cliente no painel (só para quem tem crediário). */
+function resumoCredito() {
+  const cr = state.credit;
+  if (!cr || cr.limitCents === null) return null;
+  const texto = cr.status === 'BLOQUEADO' ? 'Crediário bloqueado'
+    : cr.overdue.count ? `Crediário: ${cr.overdue.count} parcela(s) em atraso`
+    : `Crediário disponível ${fmtBRL(cr.availableCents)}`;
+  return h('div', { class: 'pdv-hint' }, texto);
 }
 
 async function reprecificar() {
@@ -234,11 +250,10 @@ function recuperar() {
   const lista = h('div', { class: 'list-group lf-pdv-sugestoes' }, rows.map((r) => h('button', {
     class: 'list-group-item list-group-item-action d-flex justify-content-between',
     onclick: () => {
-      state.items = r.items; state.customer = r.customer; state.discountCents = r.discountCents;
+      state.items = r.items; state.discountCents = r.discountCents;
       gravarSuspensas(lerSuspensas().filter((x) => x.id !== r.id));
       m.close();
-      render();
-      reprecificar(); // a tabela pode ter mudado enquanto a venda esteve suspensa
+      definirCliente(r.customer); // reprecifica: a tabela pode ter mudado enquanto a venda esteve suspensa
     },
   },
     h('span', {}, `${r.items.length} item(ns)`,
@@ -251,6 +266,7 @@ function recuperar() {
 function limpar() {
   state.items = [];
   state.customer = null;
+  state.credit = null;
   state.discountCents = 0;
   state.index = -1;
   render();
@@ -302,6 +318,11 @@ function finalizar() {
   }, h('span', { class: 'pdv-key' }, String(i + 1)), m.name));
 
   function selecionar(m) {
+    // crediário: o limite do cliente é conferido no servidor na hora da venda
+    if (m.type === 'crediario') {
+      if (!state.customer) return toast('Crediário exige identificar o cliente (F4).', 'warning');
+      if (semConexao()) return toast('Crediário precisa de conexão para conferir o limite do cliente.', 'warning');
+    }
     metodo = m;
     botoes.forEach((b, i) => b.classList.toggle('is-on', state.methods[i].id === m.id));
     parcelas.classList.toggle('d-none', !m.allowsInstallments);
@@ -924,7 +945,8 @@ function render() {
             h('span', { class: 'pdv-label mb-0' }, 'Cliente'),
             h('div', { class: 'pdv-customer' }, state.customer?.name ?? 'Não identificado'),
             state.customer?.priceList?.active
-              ? h('div', { class: 'pdv-hint' }, `Tabela ${state.customer.priceList.name}`) : null),
+              ? h('div', { class: 'pdv-hint' }, `Tabela ${state.customer.priceList.name}`) : null,
+            resumoCredito()),
           h('button', { class: 'pdv-btn', onclick: escolherCliente },
             h('span', { class: 'pdv-key' }, 'F4'), ' Trocar'))),
       painelCaixa(),

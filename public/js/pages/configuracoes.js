@@ -18,6 +18,8 @@ export default async function render({ content, can }) {
     maxDiscountPct: input({ inputmode: 'decimal', value: String(s.maxDiscountPct) }),
     sangriaApproval: input({ inputmode: 'decimal', value: centsToInput(s.sangriaApprovalCents) }),
     receiptFooter: textarea({ value: s.receiptFooter, rows: 2 }),
+    crediarioIntervalDays: input({ inputmode: 'numeric', value: String(s.crediarioIntervalDays ?? 30) }),
+    crediarioGraceDays: input({ inputmode: 'numeric', value: String(s.crediarioGraceDays ?? 0) }),
   };
 
   const linha = (campo, titulo, descricao) => h('div', { class: 'col-12 col-md-6' },
@@ -39,6 +41,12 @@ export default async function render({ content, can }) {
     field('Sangria sem autorização até (R$)', f.sangriaApproval, {
       col: 'col-6 col-md-3', help: 'Valores maiores exigem perfil gerente ou acima.',
     }),
+    field('Crediário: dias entre parcelas', f.crediarioIntervalDays, {
+      col: 'col-6 col-md-3', help: 'A 1ª parcela vence esse número de dias após a venda.',
+    }),
+    field('Crediário: tolerância de atraso (dias)', f.crediarioGraceDays, {
+      col: 'col-6 col-md-3', help: 'Atraso maior que isso barra nova compra no crediário.',
+    }),
     field('Rodapé do comprovante', f.receiptFooter, { col: 'col-12' }),
     h('div', { class: 'col-12 text-end' }, salvar));
 
@@ -55,6 +63,8 @@ export default async function render({ content, can }) {
         maxDiscountPct: Number(f.maxDiscountPct.value.replace(',', '.')) || 0,
         sangriaApprovalCents: moneyToCents(f.sangriaApproval.value),
         receiptFooter: f.receiptFooter.value.trim(),
+        crediarioIntervalDays: Math.max(1, parseInt(f.crediarioIntervalDays.value, 10) || 30),
+        crediarioGraceDays: Math.max(0, parseInt(f.crediarioGraceDays.value, 10) || 0),
       });
       toast('Configurações salvas.');
     } catch (err) { toast(err.message, 'error'); } finally { salvar.disabled = false; }

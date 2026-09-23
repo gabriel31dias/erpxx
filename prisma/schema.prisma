@@ -449,6 +449,11 @@ model Customer {
   active    Boolean   @default(true)
   priceListId String? // tabela de preço do cliente; sem tabela = preço do cadastro
 
+  // ---- Crediário: parcelas são FinanceEntry RECEITA pendentes (instrument = crediario) ----
+  creditLimitCents  Int? // null = cliente sem crediário
+  creditStatus      String  @default("LIBERADO") // LIBERADO | BLOQUEADO
+  creditBlockReason String?
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?

@@ -13,6 +13,7 @@ import {
 import { can } from '../common/rbac';
 import { StockService } from './stock';
 import { PricingModule, PricingService } from './pricing';
+import { CreditModule, CreditService, installmentPlan } from './credit';
 import { fmtBRL, itemTotalCents, paging, roundQty } from '../common/util';
 
 export const SALE_STATUS = ['OPEN', 'COMPLETED', 'CANCELLED', 'REFUNDED'];
@@ -108,6 +109,7 @@ export class SalesService {
     private clock: TimeService,
     private idem: IdempotencyService,
     private pricing: PricingService,
+    private credit: CreditService,
   ) {}
 
   async create(a: SaleActor, dto: SaleDto, ip?: string, soldAt?: string, ext?: ExtSaleInfo) {
@@ -160,6 +162,17 @@ export class SalesService {
       .reduce((s, p) => s + p.amountCents, 0);
     if (receivedCash < cashDue) throw new BadRequestException('Valor recebido em dinheiro menor que o pagamento.');
     const change = receivedCash - cashDue;
+
+    // ----- crediário: limite, bloqueio e atraso do cliente -----
+    const creditCents = payments.filter((p) => p.methodType === 'crediario').reduce((s, p) => s + p.amountCents, 0);
+    let creditOverride: string[] = [];
+    if (creditCents > 0) {
+      const { reasons } = await this.credit.check(a.companyId, dto.customerId, creditCents, { offline: ext?.offline });
+      if (reasons.length && !can(a.role, 'credito.liberar')) {
+        throw new ForbiddenException(`Crediário não liberado. ${reasons.join(' ')}`);
+      }
+      creditOverride = reasons; // liberado por quem tem a permissão: vai para a auditoria
+    }
 
     // ----- caixa aberto (vendedor externo não passa pelo caixa da loja) -----
     const session = a.sellerId ? null : await this.currentSession(a, branchId, dto.cashSessionId);
@@ -215,23 +228,43 @@ export class SalesService {
           }
         }
 
-        // financeiro: a venda vira receita — recebida, ou pendente se o app ainda vai receber
+        // financeiro: a parte à vista vira receita — recebida, ou pendente se o app ainda vai receber;
+        // cada pagamento no crediário vira parcelas pendentes no nome do cliente
         const category = await tx.financialCategory.findFirst({
           where: { companyId: a.companyId, type: 'RECEITA', name: 'Vendas', deletedAt: null },
         });
-        await tx.financeEntry.create({
-          data: {
-            companyId: a.companyId, branchId, type: 'RECEITA',
-            description: `Venda #${number}`, amountCents: total,
-            dueDate: receivable ? dueDate ?? at.slice(0, 10) : at.slice(0, 10),
-            paidAt: receivable ? null : at.slice(0, 10), status: receivable ? 'pending' : 'paid',
-            categoryId: category?.id ?? null, customerId: dto.customerId || null,
-            saleId: created.id, paymentMethodId: payments[0].paymentMethodId, createdById: a.userId,
-            instrument: ext?.paidInApp ? ext.appPaymentMethod : null,
-            instrumentInfo: ext?.appPaymentMethod === 'boleto' && ext.appPaymentRef
-              ? JSON.stringify({ nossoNumero: ext.appPaymentRef }) : null,
-          },
-        });
+        const upfront = payments.filter((p) => p.methodType !== 'crediario');
+        if (upfront.length || !creditCents) {
+          await tx.financeEntry.create({
+            data: {
+              companyId: a.companyId, branchId, type: 'RECEITA',
+              description: `Venda #${number}`, amountCents: total - creditCents,
+              dueDate: receivable ? dueDate ?? at.slice(0, 10) : at.slice(0, 10),
+              paidAt: receivable ? null : at.slice(0, 10), status: receivable ? 'pending' : 'paid',
+              categoryId: category?.id ?? null, customerId: dto.customerId || null,
+              saleId: created.id, paymentMethodId: (upfront[0] ?? payments[0]).paymentMethodId, createdById: a.userId,
+              instrument: ext?.paidInApp ? ext.appPaymentMethod : null,
+              instrumentInfo: ext?.appPaymentMethod === 'boleto' && ext.appPaymentRef
+                ? JSON.stringify({ nossoNumero: ext.appPaymentRef }) : null,
+            },
+          });
+        }
+        for (const [idx, p] of payments.entries()) {
+          if (p.methodType !== 'crediario') continue;
+          const group = `${created.id}-${idx}`;
+          for (const parcela of installmentPlan(p.amountCents, p.installments, at.slice(0, 10), settings.crediarioIntervalDays)) {
+            await tx.financeEntry.create({
+              data: {
+                companyId: a.companyId, branchId, type: 'RECEITA',
+                description: `Venda #${number} · crediário ${parcela.no}/${p.installments}`,
+                amountCents: parcela.amountCents, dueDate: parcela.dueDate, status: 'pending',
+                categoryId: category?.id ?? null, customerId: dto.customerId!, saleId: created.id,
+                paymentMethodId: p.paymentMethodId, createdById: a.userId, instrument: 'crediario',
+                installmentGroup: group, installmentNo: parcela.no, installmentOf: p.installments,
+              },
+            });
+          }
+        }
         return created;
       }, TX));
 
@@ -239,6 +272,10 @@ export class SalesService {
     await this.audit.log(who, 'create', 'Sale', sale.id,
       { numero: sale.number, total, desconto: discountTotal, itens: items.length,
         ...(a.sellerId ? { vendedorExterno: a.sellerId } : {}) }, ip);
+    if (creditOverride.length) {
+      await this.audit.log(who, 'credit_override', 'Sale', sale.id,
+        { numero: sale.number, crediario: creditCents, cliente: dto.customerId, motivos: creditOverride }, ip);
+    }
     if (offlinePrices.length) {
       await this.audit.log(who, 'price_divergence', 'Sale', sale.id,
         { numero: sale.number, motivo: 'venda offline com preço anterior à mudança', itens: offlinePrices }, ip);
@@ -484,6 +521,14 @@ export class SalesController {
     if (!sale) throw new NotFoundException('Venda não encontrada.');
     if (sale.status === 'CANCELLED') return sale;
     if (sale.status !== 'COMPLETED') throw new BadRequestException('Só é possível cancelar uma venda concluída.');
+    const paidCredit = await this.db.financeEntry.count({
+      // parcela do crediário = lançamento da venda com grupo de parcelas (a baixa pode trocar o instrument)
+      where: { companyId: u.companyId, saleId: id, installmentGroup: { not: null }, status: 'paid', deletedAt: null },
+    });
+    if (paidCredit) {
+      throw new BadRequestException(
+        `A venda tem ${paidCredit} parcela(s) do crediário já recebida(s). Estorne o recebimento no financeiro antes de cancelar.`);
+    }
 
     const at = await this.clock.now(u.companyId);
     const settings = await this.settings.of(u.companyId);
@@ -548,7 +593,7 @@ export class SalesController {
 }
 
 @Module({
-  imports: [PricingModule],
+  imports: [PricingModule, CreditModule],
   controllers: [SalesController],
   providers: [StockService, SalesService],
   exports: [SalesService],
