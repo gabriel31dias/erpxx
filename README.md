@@ -11,14 +11,26 @@ frontend em módulos ES nativos sem bundler, e a mesma camada offline (service w
 
 ```bash
 npm install
-npx prisma db push        # cria data/app.db a partir do schema
+npx prisma db push        # cria as tabelas no Postgres do DATABASE_URL
 npm run seed              # dados de demonstração
 npm run dev               # http://localhost:3001
 npm run cert && npm run dev:https   # https na rede local (necessário p/ o PDV offline)
 ```
 
-Produção: `npm run build && npm start`. Para trocar de banco, mude `datasource` em
-`prisma/schema.prisma` para `postgresql` e ajuste `DATABASE_URL` — os models não mudam.
+Produção: `npm run build && npm start`. Banco: PostgreSQL (`DATABASE_URL` no `.env`).
+
+### Aprovação de contas
+
+Loja cadastrada pelo `/cadastro.html` nasce **pendente**: não entra até um aprovador da
+plataforma liberar. Aprovador não pertence a nenhuma empresa; entra pelo mesmo `/login.html`
+e cai em `/aprovacoes.html` (pendentes, aprovadas, recusadas). O teste grátis conta a partir
+da aprovação.
+
+```bash
+npm run aprovador -- voce@dominio.com "Seu Nome"   # cria (ou redefine a senha) e mostra a senha gerada
+APROVADOR_SENHA='...' npm run aprovador -- voce@dominio.com   # senha escolhida
+npm run aprovador -- voce@dominio.com --desativar  # bloqueia na hora
+```
 
 ### Acessos de demonstração (senha `senha1234`)
 
@@ -36,7 +48,7 @@ Produção: `npm run build && npm start`. Para trocar de banco, mude `datasource
 npm test
 ```
 
-Sobe a API contra um banco descartável (`data/test.db`) e checa 44 regras: cálculo da venda,
+Sobe a API contra um banco descartável (`TEST_DATABASE_URL`, zerado a cada execução) e checa 44 regras: cálculo da venda,
 pagamento dividido, troco, snapshot de preço/custo, baixa e devolução de estoque, estoque
 insuficiente, **duas vendas simultâneas do último item** (uma passa, a outra recebe 409),
 idempotência, cancelamento com estorno, abertura/sangria/suprimento/fechamento de caixa,
@@ -160,7 +172,7 @@ vencido ou assinatura suspensa bloqueiam escrita). A cobrança em si ainda não 
 
 ## Decisões que economizaram código
 
-- **SQLite + Prisma** em vez de subir Postgres: um arquivo, mesmo schema, troca de provider depois.
+- **PostgreSQL + Prisma**: o schema nasceu no SQLite (por isso os "enums" são String) e migrou sem mudar os models.
 - **Contas a pagar/receber, despesas e receitas numa tabela só** (`FinanceEntry` com `type` +
   `status`): três tabelas quase idênticas só multiplicariam relatório e migração.
 - **Papéis fixos em código** no lugar de `Role`/`Permission`/`UserRole`: funções personalizadas

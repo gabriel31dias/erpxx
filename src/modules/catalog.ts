@@ -108,11 +108,11 @@ export class ProductsController {
       ...(status === 'ativo' ? { active: true } : status === 'inativo' ? { active: false } : {}),
       ...(term ? {
         OR: [
-          { name: { contains: term } },
-          { sku: { contains: term } },
-          { barcode: { contains: term } },
-          { internalCode: { contains: term } },
-          { brand: { contains: term } },
+          { name: { contains: term, mode: 'insensitive' as const } },
+          { sku: { contains: term, mode: 'insensitive' as const } },
+          { barcode: { contains: term, mode: 'insensitive' as const } },
+          { internalCode: { contains: term, mode: 'insensitive' as const } },
+          { brand: { contains: term, mode: 'insensitive' as const } },
         ],
       } : {}),
     };
@@ -162,7 +162,7 @@ export class ProductsController {
     const rows = await this.db.product.findMany({
       where: {
         ...base,
-        OR: [{ name: { contains: term } }, { sku: { contains: term } }, { barcode: { contains: term } }],
+        OR: [{ name: { contains: term, mode: 'insensitive' as const } }, { sku: { contains: term, mode: 'insensitive' as const } }, { barcode: { contains: term, mode: 'insensitive' as const } }],
       },
       include: { stocks: true },
       orderBy: { name: 'asc' },

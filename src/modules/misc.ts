@@ -26,14 +26,14 @@ export class MiscController {
       can(u.role, 'produto.visualizar') ? this.db.product.findMany({
         where: {
           companyId: u.companyId, deletedAt: null,
-          OR: [{ name: { contains: term } }, { sku: { contains: term } }, { barcode: { contains: term } }],
+          OR: [{ name: { contains: term, mode: 'insensitive' as const } }, { sku: { contains: term, mode: 'insensitive' as const } }, { barcode: { contains: term, mode: 'insensitive' as const } }],
         },
         select: { id: true, name: true, sku: true, priceCents: true }, take,
       }) : [],
       can(u.role, 'cliente.visualizar') ? this.db.customer.findMany({
         where: {
           companyId: u.companyId, deletedAt: null,
-          OR: [{ name: { contains: term } }, { phone: { contains: term } }, { document: { contains: term } }],
+          OR: [{ name: { contains: term, mode: 'insensitive' as const } }, { phone: { contains: term, mode: 'insensitive' as const } }, { document: { contains: term, mode: 'insensitive' as const } }],
         },
         select: { id: true, name: true, phone: true }, take,
       }) : [],
@@ -43,7 +43,7 @@ export class MiscController {
           ...this.branches.scope(u),
           OR: [
             ...(Number(term) ? [{ number: Number(term) }] : []),
-            { customer: { name: { contains: term } } },
+            { customer: { name: { contains: term, mode: 'insensitive' as const } } },
           ],
         },
         select: { id: true, number: true, soldAt: true, totalCents: true, customer: { select: { name: true } } },
@@ -52,7 +52,7 @@ export class MiscController {
       can(u.role, 'fornecedor.visualizar') ? this.db.supplier.findMany({
         where: {
           companyId: u.companyId, deletedAt: null,
-          OR: [{ name: { contains: term } }, { tradeName: { contains: term } }, { document: { contains: term } }],
+          OR: [{ name: { contains: term, mode: 'insensitive' as const } }, { tradeName: { contains: term, mode: 'insensitive' as const } }, { document: { contains: term, mode: 'insensitive' as const } }],
         },
         select: { id: true, name: true, phone: true }, take,
       }) : [],

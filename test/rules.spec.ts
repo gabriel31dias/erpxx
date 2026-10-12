@@ -2,8 +2,10 @@
  * Verificação das regras que não podem quebrar: isolamento entre empresas,
  * permissões, cálculo da venda, pagamento dividido, troco, estoque, caixa,
  * cancelamento, idempotência e concorrência entre dois caixas.
- * Roda contra um banco descartável (data/test.db): `npm test`.
+ * Roda contra um banco descartável (TEST_DATABASE_URL, zerado a cada execução): `npm test`.
  */
+try { process.loadEnvFile(); } catch { /* sem .env: usa o ambiente */ }
+process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 process.env.JWT_SECRET = 'test-secret';
 process.env.NODE_ENV = 'test';
 process.env.PLAN_BASICO_LIMITS = '3,1,1,500';
@@ -25,6 +27,8 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import cookieParser = require('cookie-parser');
 import { PrismaClient } from '@prisma/client';
+import * as bcrypt from 'bcryptjs';
+import { zerarBanco } from './db';
 import { itemTotalCents, periodRange, roundQty, toCsv, addDays, addMonths } from '../src/common/util';
 
 let failures = 0;
@@ -60,10 +64,8 @@ function client(base: string) {
 
 async function main() {
   rmSync(process.env.UPLOADS_DIR!, { recursive: true, force: true });
-  for (const f of ['test.db', 'test.db-journal', 'test.db-wal', 'test.db-shm']) {
-    rmSync(join(__dirname, '..', 'data', f), { force: true });
-  }
-  execSync('npx prisma db push --skip-generate --accept-data-loss', {
+  await zerarBanco();
+  execSync('npx prisma db push --skip-generate', {
     cwd: join(__dirname, '..'), stdio: 'ignore', env: process.env,
   });
 
@@ -151,15 +153,94 @@ async function main() {
   const loja = await api('POST', '/api/auth/register', {
     companyName: 'Loja Teste', name: 'Dona Ana', email: 'ana@teste.com', password: 'senha1234',
   });
-  await check('cadastro cria empresa, filial, PDV e formas de pagamento', async () => {
+
+  await db.approver.create({
+    data: { name: 'Equipe Blue', email: 'aprova@plataforma.com', passwordHash: await bcrypt.hash('senha1234', 4) },
+  });
+  const plat = client(base);
+  const entrouPlat = await plat('POST', '/api/auth/login', { email: 'aprova@plataforma.com', password: 'senha1234' });
+
+  await check('cadastro nasce pendente, sem sessão, e não entra antes da aprovação', async () => {
     assert.equal(loja.status, 201);
+    assert.equal(loja.data.status, 'pendente');
+    assert.equal(loja.data.redirect, undefined);
+    assert.equal((await api('GET', '/api/auth/me')).status, 401);
+    const login = await api('POST', '/api/auth/login', { email: 'ana@teste.com', password: 'senha1234' });
+    assert.equal(login.status, 401);
+    assert.match(login.data.message, /aguardando aprovação/);
+  });
+
+  await check('aprovador entra pelo mesmo login e vê a conta pendente', async () => {
+    assert.equal(entrouPlat.data.redirect, '/aprovacoes.html');
+    const contas = await plat('GET', '/api/platform/accounts');
+    assert.equal(contas.data.counts.pendente, 1);
+    assert.equal(contas.data.rows[0].name, 'Loja Teste');
+    assert.equal(contas.data.rows[0].owner.email, 'ana@teste.com');
+  });
+
+  await check('sessão de aprovador não abre o ERP; sessão de loja não abre a aprovação', async () => {
+    assert.equal((await plat('GET', '/api/products')).status, 401);
+    assert.equal((await plat('GET', '/api/auth/me')).status, 401);
+    assert.equal((await api('GET', '/api/platform/accounts')).status, 401);
+  });
+
+  const pendenteId = loja.data.company.id;
+  await check('aprovar libera o login e o teste grátis conta da aprovação', async () => {
+    await db.subscription.updateMany({ where: { companyId: pendenteId }, data: { trialEndsAt: new Date(2000, 0, 1) } });
+    assert.equal((await plat('POST', `/api/platform/accounts/${pendenteId}/approve`)).status, 201);
+    const sub = await db.subscription.findFirstOrThrow({ where: { companyId: pendenteId } });
+    assert.ok(sub.trialEndsAt! > new Date());
+    assert.equal((await plat('POST', `/api/platform/accounts/${pendenteId}/approve`)).status, 409);
+    assert.equal((await plat('POST', `/api/platform/accounts/${pendenteId}/reject`, {})).status, 409);
+    const login = await api('POST', '/api/auth/login', { email: 'ana@teste.com', password: 'senha1234' });
+    assert.equal(login.status, 201);
+  });
+
+  await check('conta recusada não entra e guarda o motivo', async () => {
+    const r = await client(base)('POST', '/api/auth/register', {
+      companyName: 'Loja Fake', name: 'Zé', email: 'ze@fake.com', password: 'senha1234',
+    });
+    const rec = await plat('POST', `/api/platform/accounts/${r.data.company.id}/reject`, { reason: 'Dados falsos' });
+    assert.equal(rec.status, 201);
+    const login = await client(base)('POST', '/api/auth/login', { email: 'ze@fake.com', password: 'senha1234' });
+    assert.equal(login.status, 401);
+    assert.match(login.data.message, /não aprovado/);
+    const recusadas = await plat('GET', '/api/platform/accounts?status=recusada');
+    assert.equal(recusadas.data.rows[0].rejectReason, 'Dados falsos');
+    assert.equal(recusadas.data.rows[0].reviewedBy, 'Equipe Blue');
+  });
+
+  await check('aprovador desativado perde o acesso na hora', async () => {
+    const outro = await db.approver.create({
+      data: { name: 'Temp', email: 'temp@plataforma.com', passwordHash: await bcrypt.hash('senha1234', 4) },
+    });
+    const t = client(base);
+    await t('POST', '/api/auth/login', { email: 'temp@plataforma.com', password: 'senha1234' });
+    assert.equal((await t('GET', '/api/platform/me')).status, 200);
+    await db.approver.update({ where: { id: outro.id }, data: { active: false } });
+    assert.equal((await t('GET', '/api/platform/me')).status, 401);
+  });
+
+  await check('cadastro cria empresa, filial, PDV e formas de pagamento', async () => {
     const me = await api('GET', '/api/auth/me');
     assert.equal(me.data.user.role, 'proprietario');
     assert.equal(me.data.branches.length, 1);
     const registers = await api('GET', '/api/cash/registers');
     assert.equal(registers.data.rows.length, 1);
+  });
+
+  await check('conta nova já vem com as 5 formas de pagamento padrão', async () => {
     const methods = await api('GET', '/api/company/payment-methods');
-    assert.ok(methods.data.rows.length >= 4);
+    const resumo = methods.data.rows.map((m: any) => [
+      m.name, m.type, m.requiresChange, m.allowsInstallments ? m.maxInstallments : 1, m.feePct, m.active,
+    ]);
+    assert.deepEqual(resumo, [
+      ['Dinheiro', 'dinheiro', true, 1, 0, true],
+      ['PIX', 'pix', false, 1, 0, true],
+      ['Cartão de débito', 'debito', false, 1, 0, true],
+      ['Cartão de crédito', 'credito', false, 12, 0, true],
+      ['Crediário', 'crediario', false, 10, 0, true],
+    ]);
   });
 
   await check('assinatura nasce em teste (trial)', async () => {
@@ -168,9 +249,11 @@ async function main() {
   });
 
   const outra = client(base);
-  await outra('POST', '/api/auth/register', {
+  const concorrenteCad = await outra('POST', '/api/auth/register', {
     companyName: 'Concorrente', name: 'Beto', email: 'beto@teste.com', password: 'senha1234',
   });
+  await plat('POST', `/api/platform/accounts/${concorrenteCad.data.company.id}/approve`);
+  await outra('POST', '/api/auth/login', { email: 'beto@teste.com', password: 'senha1234' });
 
   // ---------- catálogo e estoque ----------
   console.log('\nCatálogo e estoque');
@@ -350,8 +433,21 @@ async function main() {
     const erro = [r1, r2].filter((r) => r.status !== 201);
     assert.equal(ok.length, 1, `esperado 1 venda ok, veio ${ok.length}`);
     assert.equal(erro.length, 1);
+    assert.equal(erro[0].status, 409, 'a perdedora falha por estoque, não por erro interno');
     const p = await api('GET', `/api/products/${unico.data.id}`);
     assert.equal(p.data.product.stock, 0);
+  });
+
+  await check('oito vendas simultâneas com estoque: todas passam com números distintos', async () => {
+    const farto = await api('POST', '/api/products', {
+      name: 'Item farto', priceCents: 500, costCents: 100, initialStock: 100,
+    });
+    const rs = await Promise.all(Array.from({ length: 8 }, () => api('POST', '/api/sales', {
+      items: [{ productId: farto.data.id, quantity: 1 }],
+      payments: [{ paymentMethodId: pix.id, amountCents: 500 }],
+    })));
+    assert.deepEqual(rs.map((r) => r.status), Array(8).fill(201));
+    assert.equal(new Set(rs.map((r) => r.data.number)).size, 8);
   });
 
   // ---------- cancelamento ----------

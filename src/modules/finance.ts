@@ -146,7 +146,7 @@ export class FinanceController {
       ...(type ? { type } : {}),
       ...(status ? { status } : {}),
       ...(categoryId ? { categoryId } : {}),
-      ...(q?.trim() ? { description: { contains: q.trim() } } : {}),
+      ...(q?.trim() ? { description: { contains: q.trim(), mode: 'insensitive' as const } } : {}),
       ...(from || to ? { [field]: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
     };
     const [rows, total, agg] = await Promise.all([

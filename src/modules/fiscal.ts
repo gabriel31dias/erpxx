@@ -147,9 +147,9 @@ export class FiscalController {
 
     // aloca número da NFC-e de forma atômica
     const doc = await this.db.$transaction(async (tx) => {
-      const c = await tx.company.findUniqueOrThrow({ where: { id: u.companyId } });
-      const numero = c.nfceProx;
-      await tx.company.update({ where: { id: u.companyId }, data: { nfceProx: numero + 1 } });
+      // o increment trava a linha: emissão simultânea espera e pega o número seguinte
+      const c = await tx.company.update({ where: { id: u.companyId }, data: { nfceProx: { increment: 1 } } });
+      const numero = c.nfceProx - 1;
 
       const payload = this.montarPayload(c, sale, 'nfce', c.nfceSerie, numero);
       const provider = getProvider(c);

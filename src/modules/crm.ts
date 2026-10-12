@@ -67,9 +67,9 @@ export class CustomersController {
       ...(status === 'ativo' ? { active: true } : status === 'inativo' ? { active: false } : {}),
       ...(term ? {
         OR: [
-          { name: { contains: term } }, { phone: { contains: term } },
-          { whatsapp: { contains: term } }, { document: { contains: term } },
-          { email: { contains: term } },
+          { name: { contains: term, mode: 'insensitive' as const } }, { phone: { contains: term, mode: 'insensitive' as const } },
+          { whatsapp: { contains: term, mode: 'insensitive' as const } }, { document: { contains: term, mode: 'insensitive' as const } },
+          { email: { contains: term, mode: 'insensitive' as const } },
         ],
       } : {}),
     };
@@ -252,8 +252,8 @@ export class SuppliersController {
       ...(status === 'ativo' ? { active: true } : status === 'inativo' ? { active: false } : {}),
       ...(term ? {
         OR: [
-          { name: { contains: term } }, { tradeName: { contains: term } },
-          { document: { contains: term } }, { phone: { contains: term } },
+          { name: { contains: term, mode: 'insensitive' as const } }, { tradeName: { contains: term, mode: 'insensitive' as const } },
+          { document: { contains: term, mode: 'insensitive' as const } }, { phone: { contains: term, mode: 'insensitive' as const } },
         ],
       } : {}),
     };

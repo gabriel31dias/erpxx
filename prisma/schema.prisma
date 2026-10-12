@@ -1,6 +1,5 @@
 // LojaFlow — ERP + PDV multi-tenant.
-// ponytail: SQLite p/ rodar sem infra; trocar provider p/ postgresql sobe pra produção
-// sem mudar os models (enums viram String por limitação do SQLite).
+// Postgres. Os "enums" são String porque o schema nasceu no SQLite.
 //
 // Regras que o schema precisa sustentar:
 //  - todo dado comercial tem companyId (+ branchId quando é de loja);
@@ -12,7 +11,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -57,6 +56,21 @@ model Subscription {
 }
 
 // ---------- Empresa ----------
+/// Usuário da plataforma (fora de qualquer empresa): aprova ou recusa as contas
+/// criadas pelo cadastro. Criado pela linha de comando: `npm run aprovador`.
+model Approver {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  active       Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  reviewed Company[]
+}
+
 model Company {
   id         String  @id @default(cuid())
   name       String // razão social
@@ -83,6 +97,13 @@ model Company {
   settings   String  @default("{}")
   onboarded  Boolean @default(false)
   active     Boolean @default(true)
+
+  // Cadastro pelo site nasce "pendente" e só entra depois que um aprovador libera.
+  status       String    @default("aprovada") // pendente|aprovada|recusada
+  reviewedAt   DateTime?
+  reviewedById String?
+  rejectReason String?
+  reviewedBy   Approver? @relation(fields: [reviewedById], references: [id])
 
   // Gateway PIX (Blue). A secret nunca é devolvida ao cliente.
   pixEnabled   Boolean @default(false)
@@ -146,6 +167,8 @@ model Company {
   notifications  Notification[]
   auditLogs      AuditLog[]
   idempotency    IdempotencyKey[]
+
+  @@index([status, createdAt])
 }
 
 model Branch {

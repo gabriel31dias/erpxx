@@ -44,7 +44,9 @@ form?.addEventListener('submit', async (e) => {
     const res = await post(ENDPOINTS[page], body);
     if (res.redirect) {
       const next = new URLSearchParams(location.search).get('next');
-      location.href = page === 'login' && next ? next : res.redirect;
+      // aprovador só volta para a tela de aprovação; loja nunca vai para ela
+      const vale = next && page === 'login' && next.startsWith('/aprovacoes') === !!res.platform;
+      location.href = vale ? next : res.redirect;
       return;
     }
     show(res.message || 'Tudo certo!', 'success');

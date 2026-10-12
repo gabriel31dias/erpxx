@@ -9,7 +9,7 @@ import type { Request, Response } from 'express';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import { PRISMA, Db } from '../common/prisma.service';
-import { AUTH_COOKIE, CurrentUser, Public, SessionUser } from '../common/auth.guard';
+import { ApproverSession, AUTH_COOKIE, CurrentUser, Public, SessionUser } from '../common/auth.guard';
 import { AuditService, DEFAULT_SETTINGS } from '../common/core';
 import { permissionsOf, ROLE_LABELS } from '../common/rbac';
 import { slugify } from '../common/util';
@@ -145,7 +145,7 @@ export class AuthService {
       data: {
         name: dto.companyName.trim(), tradeName: dto.companyName.trim(), slug,
         phone: dto.phone ?? null, whatsapp: dto.phone ?? null, email, planId: plan.id,
-        settings: JSON.stringify(DEFAULT_SETTINGS),
+        settings: JSON.stringify(DEFAULT_SETTINGS), status: 'pendente',
         subscriptions: {
           create: {
             planId: plan.id, status: 'trial', amountCents: plan.priceCents,
@@ -179,8 +179,25 @@ export class AuthService {
       password, user?.passwordHash ?? '$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalid');
     if (!user || !ok) throw new UnauthorizedException('E-mail ou senha inválidos.');
     if (!user.active || user.blockedAt) throw new UnauthorizedException('Usuário bloqueado. Fale com o administrador.');
+    if (user.company.status === 'pendente') {
+      throw new UnauthorizedException('Sua conta está aguardando aprovação. Avisaremos quando for liberada.');
+    }
+    if (user.company.status === 'recusada') throw new UnauthorizedException('Cadastro não aprovado. Fale com o suporte.');
     if (user.company.deletedAt || !user.company.active) throw new UnauthorizedException('Empresa inativa.');
     return user;
+  }
+
+  /** Aprovador da plataforma: null quando o e-mail/senha não é de um aprovador. */
+  async validateApprover(email: string, password: string) {
+    const approver = await this.db.approver.findUnique({ where: { email: email.toLowerCase().trim() } });
+    if (!approver || !(await bcrypt.compare(password, approver.passwordHash))) return null;
+    if (!approver.active) throw new UnauthorizedException('Usuário bloqueado. Fale com o administrador.');
+    return approver;
+  }
+
+  signApprover(approver: { id: string; name: string }) {
+    const payload: ApproverSession = { sub: approver.id, name: approver.name, typ: 'aprovador' };
+    return this.jwt.signAsync(payload);
   }
 }
 
@@ -195,14 +212,23 @@ export class AuthController {
   @Public() @Post('register')
   @Throttle({ default: { limit: 5, ttl: 3600_000 } })
   async register(@Body() dto: RegisterDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const { user, company } = await this.service.register(dto, req.ip);
-    this.service.setCookie(res, await this.service.sign(user));
-    return { ok: true, redirect: '/onboarding.html', company: { id: company.id, name: company.name } };
+    const { company } = await this.service.register(dto, req.ip);
+    // sem sessão: a conta só entra depois de aprovada
+    return {
+      ok: true, status: company.status, company: { id: company.id, name: company.name },
+      message: 'Cadastro recebido! Sua conta está em análise e você poderá entrar assim que for aprovada.',
+    };
   }
 
   @Public() @Post('login')
   @Throttle({ default: { limit: 10, ttl: 300_000 } })
   async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const approver = await this.service.validateApprover(dto.email, dto.password);
+    if (approver) {
+      this.service.setCookie(res, await this.service.signApprover(approver));
+      await this.db.approver.update({ where: { id: approver.id }, data: { lastLoginAt: new Date() } });
+      return { ok: true, redirect: '/aprovacoes.html', platform: true };
+    }
     const user = await this.service.validate(dto.email, dto.password);
     this.service.setCookie(res, await this.service.sign(user));
     await this.db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
@@ -210,7 +236,8 @@ export class AuthController {
     return { ok: true, redirect: user.company.onboarded ? '/' : '/onboarding.html' };
   }
 
-  @Post('logout')
+  // público: sair só apaga o cookie — vale para sessão de loja e de aprovador
+  @Public() @Post('logout')
   logout(@Res({ passthrough: true }) res: Response) {
     res.clearCookie(AUTH_COOKIE, { path: '/' });
     return { ok: true, redirect: '/login.html' };

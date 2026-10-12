@@ -273,7 +273,7 @@ export class StockController {
     const term = q.trim();
     const where: any = {
       companyId: u.companyId, deletedAt: null, active: true,
-      ...(term ? { OR: [{ name: { contains: term } }, { sku: { contains: term } }, { barcode: { contains: term } }] } : {}),
+      ...(term ? { OR: [{ name: { contains: term, mode: 'insensitive' as const } }, { sku: { contains: term, mode: 'insensitive' as const } }, { barcode: { contains: term, mode: 'insensitive' as const } }] } : {}),
     };
     const products = await this.db.product.findMany({
       where, orderBy: { name: 'asc' },

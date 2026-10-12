@@ -183,9 +183,10 @@ export class SalesService {
 
     const sale = await this.idem.run(a.companyId, 'sale', dto.idempotencyKey, () =>
       this.db.$transaction(async (tx) => {
+        // Número sequencial por empresa: trava a linha da empresa até o commit, então
+        // duas vendas simultâneas da mesma loja não leem o mesmo max (outras lojas seguem em paralelo).
+        await tx.$queryRaw`SELECT id FROM "Company" WHERE id = ${a.companyId} FOR UPDATE`;
         const last = await tx.sale.aggregate({ where: { companyId: a.companyId }, _max: { number: true } });
-        // ponytail: número sequencial via max+1 dentro da transação — o SQLite
-        // serializa escritas; no Postgres trocar por sequence por empresa.
         const number = (last._max.number ?? 0) + 1;
 
         const created = await tx.sale.create({
@@ -454,8 +455,8 @@ export class SalesController {
       ...(term ? {
         OR: [
           ...(Number(term) ? [{ number: Number(term) }] : []),
-          { customer: { name: { contains: term } } },
-          { items: { some: { name: { contains: term } } } },
+          { customer: { name: { contains: term, mode: 'insensitive' as const } } },
+          { items: { some: { name: { contains: term, mode: 'insensitive' as const } } } },
         ],
       } : {}),
     };

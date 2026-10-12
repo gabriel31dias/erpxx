@@ -308,6 +308,40 @@ for (const [key, title, file, extra, extraCss] of pages) {
 }
 fs.writeFileSync(path.join(OUT, 'pdv.html'), pdvPage());
 
+/** Tela do aprovador da plataforma: fora do ERP, sem menu de loja. */
+function platformPage(key, title) {
+  return `<!doctype html>
+<html lang="pt-BR" data-page="${key}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>${title} · LojaFlow</title>
+${CSS}
+</head>
+<body class="lf-platform">
+<header class="lf-platform-bar">
+  <img src="/icons/brand-white.png" alt="Blue Vision" class="lf-logo">
+  <div class="d-flex align-items-center gap-3">
+    <span id="lf-approver" class="small"></span>
+    <button id="lf-logout" class="btn btn-sm btn-light" type="button">Sair</button>
+  </div>
+</header>
+<main class="container-xl py-4">
+  <h4 class="mb-3">${title}</h4>
+  <ul id="lf-tabs" class="nav nav-pills gap-2 mb-3"></ul>
+  <div class="card"><div id="lf-list" class="card-body p-0"></div></div>
+</main>
+<script src="/assets/js/jquery.min.js"></script>
+<script src="/assets/js/bootstrap/bootstrap.bundle.min.js"></script>
+<script src="/assets/js/icons/feather-icon/feather.min.js"></script>
+<script type="module" src="/js/${key}.js"></script>
+</body>
+</html>
+`;
+}
+
+fs.writeFileSync(path.join(OUT, 'aprovacoes.html'), platformPage('aprovacoes', 'Aprovação de contas'));
+
 const group = (label, input, help = '') =>
   `              <div class="form-group">
                 <label class="col-form-label" for="${input.id}">${label}</label>
@@ -330,7 +364,7 @@ fs.writeFileSync(path.join(OUT, 'login.html'), authPage('login', 'Entrar na sua 
    submit('Entrar')].join('\n'),
   '<a href="/esqueci-senha.html">Esqueci minha senha</a><span class="mx-2">·</span><a href="/cadastro.html">Cadastrar minha loja</a>'));
 
-fs.writeFileSync(path.join(OUT, 'cadastro.html'), authPage('cadastro', 'Criar conta da loja', 'Teste grátis e comece a vender hoje.',
+fs.writeFileSync(path.join(OUT, 'cadastro.html'), authPage('cadastro', 'Criar conta da loja', 'Cadastre a loja: liberamos o acesso após a aprovação.',
   [group('Nome da loja', text('companyName', 'companyName', 'text', 'required minlength="2"')),
    group('Seu nome', text('name', 'name', 'text', 'required minlength="2"')),
    group('E-mail', text('email', 'email', 'email', 'required autocomplete="email"')),
@@ -357,7 +391,7 @@ fs.writeFileSync(path.join(OUT, 'aceitar-convite.html'), authPage('aceitar-convi
    submit('Entrar na equipe')].join('\n'),
   '<a href="/login.html">Já tenho conta</a>'));
 
-console.log(`páginas geradas: ${pages.length + 6}`);
+console.log(`páginas geradas: ${pages.length + 7}`);
 
 // ---------- precache do service worker ----------
 function listar(dir, filtro, base = OUT) {

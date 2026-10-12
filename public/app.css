@@ -134,3 +134,13 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .lf-campo-lista { max-height: 520px; overflow-y: auto; }
 .lf-campo-vendedor { cursor: pointer; }
 .lf-campo-vendedor.is-on { outline: 2px solid #363afe; }
+
+/* ---------- aprovação de contas (plataforma) ---------- */
+.lf-platform { background: #f4f5fa; min-height: 100vh; }
+.lf-platform-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 16px; background: #363afe; color: #fff;
+}
+.lf-platform-bar .lf-logo { height: 32px; width: auto; }
+.lf-platform .nav-pills .nav-link { background: #fff; color: inherit; }
+.lf-platform .nav-pills .nav-link.active { background: #363afe; color: #fff; }

@@ -18,6 +18,13 @@ export interface SessionUser {
   name: string;
 }
 
+/** Sessão do aprovador da plataforma (fora de empresa): não abre as rotas do ERP. */
+export interface ApproverSession {
+  sub: string; // Approver.id
+  name: string;
+  typ: 'aprovador';
+}
+
 export const IS_PUBLIC = 'isPublic';
 export const Public = () => SetMetadata(IS_PUBLIC, true);
 
@@ -56,7 +63,7 @@ export class AuthGuard implements CanActivate {
     } catch {
       throw new UnauthorizedException('Sessão inválida. Entre novamente.');
     }
-    // token do app do vendedor externo não abre o ERP
+    // token do app do vendedor externo e do aprovador não abre o ERP
     if ((req.user as any).typ) throw new UnauthorizedException('Sessão inválida. Entre novamente.');
 
     const required = this.reflector.getAllAndOverride<Permission[]>(PERMS_KEY, [ctx.getHandler(), ctx.getClass()]);

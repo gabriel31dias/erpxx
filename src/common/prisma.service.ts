@@ -32,25 +32,8 @@ export function hasCompanyFilter(where: any): boolean {
  * ponytail: checagem no client; migrar p/ RLS no Postgres se algum dia houver
  * acesso ao banco fora desta API.
  */
-/**
- * SQLite aceita um escritor por vez. Abrir várias conexões não paraleliza nada:
- * só troca a espera ordenada por SQLITE_BUSY e "socket timeout" com vários
- * caixas vendendo junto. Uma conexão só = fila no pool, na ordem, sem erro.
- * ponytail: parâmetros na URL; no Postgres a função devolve a URL intacta e o
- * pool volta a ser paralelo de verdade.
- */
-export function urlDoBanco(url = process.env.DATABASE_URL ?? ''): string {
-  if (!url.startsWith('file:')) return url;
-  const [caminho, query] = url.split('?');
-  const params = new URLSearchParams(query);
-  params.set('connection_limit', '1');
-  params.set('socket_timeout', '30');
-  params.set('pool_timeout', '30');
-  return `${caminho}?${params}`;
-}
-
 export function createPrisma() {
-  const base = new PrismaClient({ datasourceUrl: urlDoBanco() });
+  const base = new PrismaClient();
   return base.$extends({
     query: {
       $allModels: {
@@ -70,11 +53,8 @@ export function createPrisma() {
 }
 
 /**
- * SQLite deixa um escritor por vez. Com vários caixas fechando venda no mesmo
- * segundo, a transação espera a vez — e o padrão do Prisma (2s de espera, 5s de
- * execução) derrubava a venda em vez de deixá-la aguardar.
- * ponytail: esperar é melhor que errar; no Postgres, escritas paralelas de
- * verdade tornam esses tetos irrelevantes.
+ * Folga sobre o padrão do Prisma (2s de espera, 5s de execução): num pico de
+ * caixas fechando venda, esperar a vez é melhor que derrubar a venda.
  */
 export const TX = { maxWait: 15_000, timeout: 20_000 };
 
@@ -88,15 +68,7 @@ export const PRISMA = 'PRISMA';
   providers: [
     {
       provide: PRISMA,
-      useFactory: async () => {
-        const db = createPrisma();
-        // WAL: leitura não trava enquanto um caixa grava a venda
-        await db.$queryRawUnsafe('PRAGMA journal_mode = WAL;');
-        await db.$executeRawUnsafe('PRAGMA foreign_keys = ON;');
-        // dois caixas fechando venda ao mesmo tempo esperam a vez em vez de dar SQLITE_BUSY
-        await db.$queryRawUnsafe('PRAGMA busy_timeout = 5000;');
-        return db;
-      },
+      useFactory: () => createPrisma(),
     },
   ],
   exports: [PRISMA],

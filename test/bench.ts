@@ -1,6 +1,6 @@
 /**
- * Teste de carga honesto: quanto o SQLite aguenta neste desenho.
- * Sobe a API num banco descartável (data/bench.db) e mede venda por venda —
+ * Teste de carga honesto: quanto o banco aguenta neste desenho.
+ * Sobe a API num banco descartável (TEST_DATABASE_URL, zerado) e mede venda por venda —
  * a operação mais pesada do sistema (transação com estoque, caixa e financeiro).
  *
  * Rode com: npm run bench
@@ -8,16 +8,16 @@
 process.env.JWT_SECRET = 'bench';
 process.env.NODE_ENV = 'test';
 process.env.THROTTLE_LIMIT = '1000000'; // o teto por IP não é o objeto da medição
+try { process.loadEnvFile(); } catch { /* sem .env: usa o ambiente */ }
+process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 
 import { execSync } from 'child_process';
-import { rmSync, statSync } from 'fs';
 import { join } from 'path';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import cookieParser = require('cookie-parser');
 import { PrismaClient } from '@prisma/client';
-
-const DB = join(__dirname, '..', 'data', 'bench.db');
+import { zerarBanco } from './db';
 
 function client(base: string) {
   let cookie = '';
@@ -46,10 +46,8 @@ const pct = (valores: number[], p: number) =>
 const linha = (rotulo: string, valor: string) => console.log(`  ${rotulo.padEnd(38, '.')} ${valor}`);
 
 async function main() {
-  for (const f of ['bench.db', 'bench.db-journal', 'bench.db-wal', 'bench.db-shm']) {
-    rmSync(join(__dirname, '..', 'data', f), { force: true });
-  }
-  execSync('npx prisma db push --skip-generate --accept-data-loss', {
+  await zerarBanco();
+  execSync('npx prisma db push --skip-generate', {
     cwd: join(__dirname, '..'), stdio: 'ignore', env: process.env,
   });
 
@@ -67,9 +65,11 @@ async function main() {
 
   // ---------- preparo ----------
   const api = client(base);
-  await api('POST', '/api/auth/register', {
+  const cadastro = await api('POST', '/api/auth/register', {
     companyName: 'Loja Carga', name: 'Operador', email: 'carga@teste.com', password: 'senha1234',
   });
+  await db.company.update({ where: { id: cadastro.data.company.id }, data: { status: 'aprovada' } });
+  await api('POST', '/api/auth/login', { email: 'carga@teste.com', password: 'senha1234' });
   const metodos = (await api('GET', '/api/company/payment-methods')).data.rows;
   const pix = metodos.find((m: any) => m.type === 'pix');
   const registers = (await api('GET', '/api/cash/registers')).data.rows;
@@ -156,12 +156,13 @@ async function main() {
   const vendas = await db.sale.count();
   const itens = await db.saleItem.count();
   const movs = await db.stockMovement.count();
-  const tamanho = statSync(DB).size / 1024 / 1024;
+  const [{ bytes }] = await db.$queryRaw<{ bytes: bigint }[]>`SELECT pg_database_size(current_database()) AS bytes`;
+  const tamanho = Number(bytes) / 1024 / 1024;
   console.log('\nVolume gerado:');
   linha('vendas', String(vendas));
   linha('itens de venda', String(itens));
   linha('movimentações de estoque', String(movs));
-  linha('tamanho do arquivo .db', `${tamanho.toFixed(1)} MB`);
+  linha('tamanho do banco', `${tamanho.toFixed(1)} MB`);
   linha('bytes por venda (com item/mov/financeiro)', `${Math.round((tamanho * 1024 * 1024) / vendas)} B`);
 
   await app.close();

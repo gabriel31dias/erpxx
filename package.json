@@ -8,12 +8,13 @@
     "start": "node dist/main.js",
     "dev": "ts-node --transpile-only src/main.ts",
     "seed": "ts-node --transpile-only prisma/seed.ts",
+    "aprovador": "node tools/aprovador.js",
     "db:push": "prisma db push",
-    "test": "DATABASE_URL=\"file:../data/test.db\" ts-node --transpile-only test/rules.spec.ts",
+    "test": "ts-node --transpile-only test/rules.spec.ts",
     "pages": "node tools/genpages.js",
     "cert": "bash tools/gen-cert.sh",
     "dev:https": "SSL_KEY=certs/server.key SSL_CERT=certs/server.crt ts-node --transpile-only src/main.ts",
-    "bench": "DATABASE_URL=\"file:../data/bench.db\" ts-node --transpile-only test/bench.ts"
+    "bench": "ts-node --transpile-only test/bench.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.28",
