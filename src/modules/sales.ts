@@ -1,9 +1,10 @@
 import {
-  BadRequestException, Body, Controller, ForbiddenException, Get, Inject, Injectable, Module,
-  NotFoundException, Param, Post, Query, Req,
+  BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, HttpCode, Inject, Injectable,
+  Module, NotFoundException, Param, Post, Query, Req,
 } from '@nestjs/common';
 import {
-  IsArray, IsInt, IsNumber, IsOptional, IsString, Matches, MaxLength, Min, MinLength, ValidateNested,
+  IsArray, IsIn, IsInt, IsISO8601, IsNumber, IsOptional, IsString, Matches, MaxLength, Min, MinLength,
+  ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import type { Request } from 'express';
@@ -20,6 +21,10 @@ import { fmtBRL, itemTotalCents, paging, roundQty } from '../common/util';
 
 export const SALE_STATUS = ['OPEN', 'COMPLETED', 'CANCELLED', 'REFUNDED'];
 const UNPAID = { status: 'pending', deletedAt: null };
+/** Id da maquininha (número de série). */
+const TERMINAL_ID = /^[\w.:-]+$/;
+/** Formas cobradas na maquininha (SiTef): a venda espera a aprovação. */
+const ON_TERMINAL = ['pix', 'debito', 'credito'];
 
 export class SaleItemDto {
   @IsString() productId!: string;
@@ -52,10 +57,19 @@ export class SaleDto {
    * Id da maquininha (número de série) em que a venda foi feita. A primeira venda
    * de um id novo cadastra a maquininha sozinha; as seguintes só atualizam o status.
    */
-  @IsOptional() @IsString() @MaxLength(64) @Matches(/^[\w.:-]+$/, { message: 'terminalId inválido.' })
+  @IsOptional() @IsString() @MaxLength(64) @Matches(TERMINAL_ID, { message: 'terminalId inválido.' })
   terminalId?: string;
   @IsArray() @ValidateNested({ each: true }) @Type(() => SaleItemDto) items!: SaleItemDto[];
   @IsArray() @ValidateNested({ each: true }) @Type(() => SalePaymentDto) payments!: SalePaymentDto[];
+}
+
+/** Resultado da cobrança que a maquininha fez no SiTef depois de criar a venda. */
+export class PaymentStatusDto {
+  @IsIn(['approved', 'declined'], { message: 'status deve ser "approved" ou "declined".' }) status!: 'approved' | 'declined';
+  @IsOptional() @IsString() @MaxLength(64) nsu?: string;
+  @IsOptional() @IsString() @MaxLength(16) responseCode?: string;
+  @IsString() @MaxLength(64) @Matches(TERMINAL_ID, { message: 'terminalId inválido.' }) terminalId!: string;
+  @IsOptional() @IsISO8601({ strict: true }, { message: 'paidAt deve ser uma data ISO 8601.' }) paidAt?: string;
 }
 
 class CancelDto {
@@ -91,6 +105,23 @@ interface PricedItem {
 export function deviceModel(userAgent?: string): string | null {
   const m = userAgent?.match(/Android [^;)]*;\s*([^;)]+?)\s+Build\//);
   return m ? m[1].slice(0, 60) : null;
+}
+
+/** Cadastra a maquininha no primeiro contato; nos seguintes, só atualiza o "visto por último". */
+function touchTerminal(tx: Tx, t: {
+  companyId: string; serial: string; branchId: string; userId: string | null;
+  ip?: string; userAgent?: string; saleAt?: string;
+}) {
+  const model = deviceModel(t.userAgent);
+  const seen = {
+    branchId: t.branchId, lastOperatorId: t.userId, lastIp: t.ip ?? null,
+    ...(t.saleAt ? { lastSaleAt: t.saleAt } : {}),
+  };
+  return tx.terminal.upsert({
+    where: { companyId_serial: { companyId: t.companyId, serial: t.serial } },
+    create: { companyId: t.companyId, serial: t.serial, model, ...seen },
+    update: { lastSeenAt: new Date(), active: true, ...seen, ...(model ? { model } : {}) },
+  });
 }
 
 export const SALE_INCLUDE = {
@@ -196,6 +227,11 @@ export class SalesService {
     const { dueDate, ...extCols } = ext ?? {};
     const receivable = !!ext && (!ext.paidInApp || ext.appPaymentMethod === 'boleto');
 
+    // maquininha: cartão/PIX ainda vai ser cobrado no SiTef depois que a venda é criada
+    const serial = dto.terminalId?.trim();
+    const onTerminal = serial && !a.sellerId ? payments.filter((p) => ON_TERMINAL.includes(p.methodType)) : [];
+    const awaitingCents = onTerminal.reduce((s, p) => s + p.amountCents, 0);
+
     const sale = await this.idem.run(a.companyId, 'sale', dto.idempotencyKey, () =>
       this.db.$transaction(async (tx) => {
         // Número sequencial por empresa: trava a linha da empresa até o commit, então
@@ -206,18 +242,8 @@ export class SalesService {
 
         // maquininha: a primeira venda com um id novo já a cadastra (a trava da empresa
         // acima serializa o upsert, então duas vendas da mesma máquina nova não colidem)
-        const serial = dto.terminalId?.trim();
-        const terminal = serial ? await tx.terminal.upsert({
-          where: { companyId_serial: { companyId: a.companyId, serial } },
-          create: {
-            companyId: a.companyId, serial, model: deviceModel(userAgent), branchId,
-            lastSaleAt: at, lastOperatorId: a.userId, lastIp: ip ?? null,
-          },
-          update: {
-            lastSeenAt: new Date(), lastSaleAt: at, branchId, active: true,
-            lastOperatorId: a.userId, lastIp: ip ?? null,
-            ...(deviceModel(userAgent) ? { model: deviceModel(userAgent) } : {}),
-          },
+        const terminal = serial ? await touchTerminal(tx as Tx, {
+          companyId: a.companyId, serial, branchId, userId: a.userId, ip, userAgent, saleAt: at,
         }) : null;
 
         const created = await tx.sale.create({
@@ -225,6 +251,7 @@ export class SalesService {
             companyId: a.companyId, branchId, cashSessionId: session?.id ?? null,
             customerId: dto.customerId || null, priceListId,
             operatorId: a.userId, sellerId: a.sellerId, terminalId: terminal?.id ?? null,
+            idempotencyKey: dto.idempotencyKey || null, paymentStatus: awaitingCents ? 'pending' : 'approved',
             number, status: 'COMPLETED',
             subtotalCents: subtotal, discountCents: discountTotal, totalCents: total,
             costTotalCents: items.reduce((s, i) => s + Math.round(i.unitCostCents * i.quantity), 0),
@@ -267,18 +294,34 @@ export class SalesService {
           where: { companyId: a.companyId, type: 'RECEITA', name: 'Vendas', deletedAt: null },
         });
         const upfront = payments.filter((p) => p.methodType !== 'crediario');
-        if (upfront.length || !creditCents) {
+        // na maquininha, a parte em cartão/PIX fica a receber até o SiTef aprovar (a rota
+        // payment-status dá a baixa); o que já entrou (dinheiro etc.) segue recebido
+        const settled = upfront.filter((p) => !onTerminal.includes(p));
+        if ((upfront.length || !creditCents) && (settled.length || !awaitingCents)) {
           await tx.financeEntry.create({
             data: {
               companyId: a.companyId, branchId, type: 'RECEITA',
-              description: `Venda #${number}`, amountCents: total - creditCents,
+              description: `Venda #${number}`, amountCents: total - creditCents - awaitingCents,
               dueDate: receivable ? dueDate ?? at.slice(0, 10) : at.slice(0, 10),
               paidAt: receivable ? null : at.slice(0, 10), status: receivable ? 'pending' : 'paid',
               categoryId: category?.id ?? null, customerId: dto.customerId || null,
-              saleId: created.id, paymentMethodId: (upfront[0] ?? payments[0]).paymentMethodId, createdById: a.userId,
+              saleId: created.id, paymentMethodId: (settled[0] ?? upfront[0] ?? payments[0]).paymentMethodId,
+              createdById: a.userId,
               instrument: ext?.paidInApp ? ext.appPaymentMethod : null,
               instrumentInfo: ext?.appPaymentMethod === 'boleto' && ext.appPaymentRef
                 ? JSON.stringify({ nossoNumero: ext.appPaymentRef }) : null,
+            },
+          });
+        }
+        if (awaitingCents) {
+          await tx.financeEntry.create({
+            data: {
+              companyId: a.companyId, branchId, type: 'RECEITA',
+              description: `Venda #${number} · maquininha`, amountCents: awaitingCents,
+              dueDate: at.slice(0, 10), status: 'pending',
+              categoryId: category?.id ?? null, customerId: dto.customerId || null,
+              saleId: created.id, paymentMethodId: onTerminal[0].paymentMethodId, createdById: a.userId,
+              instrument: onTerminal.every((p) => p.methodType === 'pix') ? 'pix' : 'cartao',
             },
           });
         }
@@ -400,6 +443,80 @@ export class SalesService {
     return !!changed && (await this.clock.now(companyId, changed)) >= at;
   }
 
+  /** Venda pelo id ou pela idempotencyKey com que foi enviada (maquininha que subiu offline). */
+  async findForPayment(companyId: string, by: { id?: string; key?: string }) {
+    if (by.id) return this.db.sale.findFirst({ where: { id: by.id, companyId }, select: { id: true } });
+    const sale = await this.db.sale.findFirst({
+      where: { companyId, idempotencyKey: by.key }, orderBy: { createdAt: 'desc' }, select: { id: true },
+    });
+    if (sale) return sale;
+    // venda anterior à coluna: a chave só está na tabela de idempotência
+    const idem = await this.db.idempotencyKey.findFirst({ where: { companyId, scope: 'sale', key: by.key } });
+    const id = idem ? (JSON.parse(idem.response) as { id?: string }).id : undefined;
+    return id ? this.db.sale.findFirst({ where: { id, companyId }, select: { id: true } }) : null;
+  }
+
+  /**
+   * Resultado da cobrança no SiTef. Só registra: recusa não cancela a venda (quem
+   * decide é a loja). Aprovação dá baixa no lançamento que esperava a maquininha.
+   * Idempotente: repetir a mesma chamada não muda nada; recusa depois de aprovação
+   * informada pela maquininha é ignorada com 409.
+   */
+  async reportPayment(a: SaleActor, saleId: string, dto: PaymentStatusDto, ip?: string, userAgent?: string) {
+    const serial = dto.terminalId.trim();
+    const result = await this.db.$transaction(async (tx) => {
+      // aprovação e recusa simultâneas da mesma venda: uma espera a outra
+      await tx.$queryRaw`SELECT id FROM "Sale" WHERE id = ${saleId} FOR UPDATE`;
+      const sale = await tx.sale.findUniqueOrThrow({
+        where: { id: saleId }, include: { terminal: { select: { serial: true } } },
+      });
+      if (sale.terminal && sale.terminal.serial !== serial) {
+        throw new BadRequestException(`A venda #${sale.number} foi feita em outra maquininha (${sale.terminal.serial}).`);
+      }
+      const reported = !!sale.paymentReportedAt;
+      if (reported && sale.paymentStatus === 'approved') {
+        if (dto.status === 'declined') {
+          throw new ConflictException(`O pagamento da venda #${sale.number} já foi aprovado. A recusa foi ignorada.`);
+        }
+        return { sale, changed: false, settled: 0 }; // aprovação repetida
+      }
+      if (reported && sale.paymentStatus === 'declined' && dto.status === 'declined'
+        && sale.nsu === (dto.nsu ?? null) && sale.responseCode === (dto.responseCode ?? null)) {
+        return { sale, changed: false, settled: 0 }; // recusa repetida
+      }
+
+      const terminal = sale.terminalId ? null : await touchTerminal(tx as Tx, {
+        companyId: a.companyId, serial, branchId: sale.branchId, userId: a.userId, ip, userAgent,
+      });
+      const paidAt = dto.status === 'approved' ? (dto.paidAt ? new Date(dto.paidAt) : new Date()) : null;
+      const updated = await tx.sale.update({
+        where: { id: saleId },
+        data: {
+          paymentStatus: dto.status, nsu: dto.nsu ?? null, responseCode: dto.responseCode ?? null,
+          paidAt, paymentReportedAt: new Date(), ...(terminal ? { terminalId: terminal.id } : {}),
+        },
+      });
+      let settled = 0;
+      if (paidAt && sale.status !== 'CANCELLED') {
+        // lançamento à vista que ficou esperando a maquininha (parcela de crediário não entra)
+        const day = (await this.clock.now(a.companyId, paidAt)).slice(0, 10);
+        settled = (await tx.financeEntry.updateMany({
+          where: { companyId: a.companyId, saleId, status: 'pending', installmentGroup: null, deletedAt: null },
+          data: { status: 'paid', paidAt: day },
+        })).count;
+      }
+      return { sale: updated, changed: true, settled, before: sale.paymentStatus };
+    }, TX);
+
+    if (result.changed) {
+      await this.audit.log({ sub: a.userId ?? undefined, companyId: a.companyId }, 'payment_status', 'Sale', saleId, {
+        numero: result.sale.number, de: result.before, para: dto.status, nsu: dto.nsu, codigo: dto.responseCode,
+        maquininha: serial, ...(result.settled ? { lancamentosBaixados: result.settled } : {}),
+      }, ip);
+    }
+    return result;
+  }
+
   /** Sessão de caixa aberta do operador na filial (obrigatória para vender). */
   private async currentSession(u: SaleActor, branchId: string, sessionId?: string) {
     if (sessionId) {
@@ -444,12 +561,15 @@ export class SalesController {
     finEntries: { where: { deletedAt: null }, select: { id: true, status: true, dueDate: true, paidAt: true } },
   } as const;
 
-  /** "paid" | "unpaid" | "cancelled", vindo do lançamento financeiro da venda. */
+  /**
+   * financeStatus: "paid" | "unpaid" | "cancelled", vindo do lançamento financeiro da venda.
+   * (paymentStatus é outra coisa: o resultado da cobrança na maquininha, gravado na venda.)
+   */
   private withPayment<T extends { status: string; finEntries: { status: string; dueDate: string }[] }>(sale: T) {
     const pending = sale.finEntries.find((e) => e.status === 'pending');
     return {
       ...sale,
-      paymentStatus: sale.status === 'CANCELLED' ? 'cancelled' : pending ? 'unpaid' : 'paid',
+      financeStatus: sale.status === 'CANCELLED' ? 'cancelled' : pending ? 'unpaid' : 'paid',
       dueDate: pending?.dueDate ?? null,
     };
   }
@@ -465,6 +585,7 @@ export class SalesController {
     @Query('operatorId') operatorId?: string,
     @Query('sellerId') sellerId?: string,
     @Query('terminalId') terminalId?: string,
+    @Query('paymentStatus') paymentStatus?: string, // pending | approved | declined (vírgula para vários)
     @Query('branchId') branchId?: string,
     @Query('paymentMethodId') paymentMethodId?: string,
     @Query('paid') paid?: string, // 'yes' | 'no'
@@ -482,6 +603,7 @@ export class SalesController {
       ...(operatorId ? { operatorId } : {}),
       ...(sellerId ? { sellerId } : {}),
       ...(terminalId ? { terminalId } : {}),
+      ...(paymentStatus ? { paymentStatus: { in: paymentStatus.split(',') } } : {}),
       ...(paymentMethodId ? { payments: { some: { paymentMethodId } } } : {}),
       ...(paid === 'no' ? { status: 'COMPLETED', finEntries: { some: UNPAID } } : {}),
       ...(paid === 'yes' ? { status: 'COMPLETED', finEntries: { none: UNPAID } } : {}),
@@ -545,6 +667,28 @@ export class SalesController {
     return this.sales.create({
       companyId: u.companyId, branchId: u.branchId, role: u.role, userId: u.sub, sellerId: null,
     }, dto, req.ip, undefined, undefined, req.headers['user-agent']);
+  }
+
+  // ---------- resultado da cobrança na maquininha (SiTef) ----------
+  @Post(':id/payment-status') @Perms('pdv.acessar') @HttpCode(200)
+  async paymentStatus(@CurrentUser() u: SessionUser, @Param('id') id: string, @Body() dto: PaymentStatusDto, @Req() req: Request) {
+    return this.reportPayment(u, { id }, dto, req);
+  }
+
+  /** Mesma coisa, achando a venda pela idempotencyKey (a maquininha offline não sabe o id). */
+  @Post('by-key/:key/payment-status') @Perms('pdv.acessar') @HttpCode(200)
+  async paymentStatusByKey(@CurrentUser() u: SessionUser, @Param('key') key: string, @Body() dto: PaymentStatusDto, @Req() req: Request) {
+    return this.reportPayment(u, { key }, dto, req);
+  }
+
+  private async reportPayment(u: SessionUser, by: { id?: string; key?: string }, dto: PaymentStatusDto, req: Request) {
+    const found = await this.sales.findForPayment(u.companyId, by);
+    if (!found) throw new NotFoundException('Venda não encontrada.');
+    const { changed, settled } = await this.sales.reportPayment({
+      companyId: u.companyId, branchId: u.branchId, role: u.role, userId: u.sub, sellerId: null,
+    }, found.id, dto, req.ip, req.headers['user-agent']);
+    const sale = await this.db.sale.findUniqueOrThrow({ where: { id: found.id }, include: this.include });
+    return { changed, settledEntries: settled, sale: this.withPayment(sale) };
   }
 
   /** Cancelamento nunca apaga: muda status, estorna estoque e registra tudo. */

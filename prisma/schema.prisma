@@ -696,6 +696,14 @@ model Sale {
   appPaymentMethod String? // pix | cartao | boleto (quando paidInApp)
   appPaymentRef    String? // id da transação/boleto no app, para conciliação
   terminalId       String? // maquininha (POS) em que a venda foi feita
+  idempotencyKey   String? // chave do envio: a maquininha que subiu offline acha a venda por ela
+  // cobrança na maquininha (SiTef). Venda da maquininha com cartão/PIX nasce "pending";
+  // o resto nasce "approved" (presumido: paymentReportedAt fica vazio até a maquininha informar)
+  paymentStatus     String    @default("approved") // pending | approved | declined
+  nsu               String? // id da transação no SiTef
+  responseCode      String? // código de retorno do SiTef ("0", "-2"…)
+  paidAt            DateTime? // aprovação informada pela maquininha
+  paymentReportedAt DateTime? // última vez que a maquininha informou o resultado
   number         Int
   status         String  @default("COMPLETED") // OPEN|COMPLETED|CANCELLED|REFUNDED
   subtotalCents  Int     @default(0)
@@ -736,6 +744,8 @@ model Sale {
   @@index([cashSessionId])
   @@index([companyId, sellerId, soldAt])
   @@index([companyId, terminalId, soldAt])
+  @@index([companyId, idempotencyKey])
+  @@index([companyId, paymentStatus, soldAt])
 }
 
 /**

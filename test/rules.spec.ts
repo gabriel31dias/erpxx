@@ -709,13 +709,13 @@ async function main() {
     assert.equal(lanc(naoPaga.data.results[0].saleId).status, 'pending');
     // ERP: lista marca como não paga e filtra
     const naoPagas = await api('GET', '/api/sales?paid=no&pageSize=100');
-    assert.ok(naoPagas.data.rows.every((v: any) => v.paymentStatus === 'unpaid'));
+    assert.ok(naoPagas.data.rows.every((v: any) => v.financeStatus === 'unpaid'));
     assert.ok(naoPagas.data.rows.some((v: any) => v.id === boleto.data.results[0].saleId));
     assert.equal(naoPagas.data.rows.find((v: any) => v.id === boleto.data.results[0].saleId).dueDate, '2026-10-10');
     assert.equal(naoPagas.data.summary.unpaidCount, naoPagas.data.total);
     const pagas = await api('GET', '/api/sales?paid=yes&pageSize=100');
     assert.ok(!pagas.data.rows.some((v: any) => v.id === boleto.data.results[0].saleId));
-    assert.equal((await api('GET', `/api/sales/${envio.data.results[0].saleId}`)).data.sale.paymentStatus, 'paid');
+    assert.equal((await api('GET', `/api/sales/${envio.data.results[0].saleId}`)).data.sale.financeStatus, 'paid');
     const semMetodo = await ext('POST', '/api/ext/sales/batch', { sales: [{ ...lote.sales[0], idempotencyKey: 'aparelho-0003', appPaymentMethod: undefined }] });
     assert.equal(semMetodo.status, 400);
     const metodoRuim = await ext('POST', '/api/ext/sales/batch', { sales: [{ ...lote.sales[0], idempotencyKey: 'aparelho-0004', appPaymentMethod: 'cheque' }] });
@@ -1303,6 +1303,98 @@ async function main() {
   await check('terminalId inválido é recusado e maquininha de outra empresa não aparece', async () => {
     assert.equal((await naMaquina('id com espaço')).status, 400);
     assert.equal((await outra('GET', '/api/terminals')).data.rows.length, 0);
+  });
+
+  // ---------- resultado da cobrança na maquininha (SiTef) ----------
+  console.log('\nPagamento na maquininha');
+  const MAQ = 'C046LT50331004';
+  const naClover = (key: string, payments: any[]) => api('POST', '/api/sales', {
+    terminalId: MAQ, idempotencyKey: key, items: [{ productId, quantity: 1 }], payments,
+  });
+  const status = (path: string, body: any) => api('POST', `/api/sales/${path}/payment-status`, body);
+  const lancamentos = (saleId: string) =>
+    db.financeEntry.findMany({ where: { saleId }, orderBy: { amountCents: 'asc' } });
+
+  const cartao = await naClover('clover-0001', [{ paymentMethodId: credito.id, amountCents: preco }]);
+  const emDinheiro = await naClover('clover-0002', [{ paymentMethodId: dinheiro.id, amountCents: preco }]);
+
+  await check('venda da maquininha com cartão nasce pendente e a receber; dinheiro nasce aprovado', async () => {
+    assert.equal(cartao.status, 201, JSON.stringify(cartao.data));
+    assert.equal(cartao.data.paymentStatus, 'pending');
+    assert.equal(cartao.data.status, 'COMPLETED');
+    const [e] = await lancamentos(cartao.data.id);
+    assert.deepEqual([e.status, e.amountCents, e.instrument], ['pending', preco, 'cartao']);
+    assert.equal(emDinheiro.data.paymentStatus, 'approved');
+    assert.equal((await lancamentos(emDinheiro.data.id))[0].status, 'paid');
+    // PDV web (sem maquininha) com cartão segue como sempre: aprovado e recebido
+    assert.equal((await naMaquina()).data.paymentStatus, 'approved');
+  });
+
+  await check('aprovado grava NSU, código e hora e dá baixa no lançamento que esperava', async () => {
+    const r = await status(cartao.data.id, {
+      status: 'approved', nsu: '123456', responseCode: '0', terminalId: MAQ, paidAt: '2026-10-17T13:30:00-03:00',
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.deepEqual([r.data.changed, r.data.settledEntries], [true, 1]);
+    assert.equal(r.data.sale.paymentStatus, 'approved');
+    assert.equal(r.data.sale.nsu, '123456');
+    assert.equal(r.data.sale.responseCode, '0');
+    assert.equal(new Date(r.data.sale.paidAt).toISOString(), '2026-10-17T16:30:00.000Z');
+    assert.equal(r.data.sale.financeStatus, 'paid');
+    const [e] = await lancamentos(cartao.data.id);
+    assert.deepEqual([e.status, e.paidAt], ['paid', '2026-10-17']);
+  });
+
+  await check('repetir a aprovação não muda nada; recusa depois da aprovação dá 409', async () => {
+    const r = await status(cartao.data.id, { status: 'approved', nsu: '123456', responseCode: '0', terminalId: MAQ });
+    assert.equal(r.status, 200);
+    assert.equal(r.data.changed, false);
+    assert.equal(new Date(r.data.sale.paidAt).toISOString(), '2026-10-17T16:30:00.000Z');
+    const recusa = await status(cartao.data.id, { status: 'declined', responseCode: '-2', terminalId: MAQ });
+    assert.equal(recusa.status, 409);
+    const venda = await api('GET', `/api/sales/${cartao.data.id}`);
+    assert.equal(venda.data.sale.paymentStatus, 'approved');
+    assert.equal((await lancamentos(cartao.data.id)).length, 1);
+    const logs = await db.auditLog.count({ where: { entityId: cartao.data.id, action: 'payment_status' } });
+    assert.equal(logs, 1);
+  });
+
+  await check('recusa pela idempotencyKey: só registra, não cancela; filtro acha a venda', async () => {
+    const misto = await naClover('clover-0003', [
+      { paymentMethodId: dinheiro.id, amountCents: 100 },
+      { paymentMethodId: credito.id, amountCents: preco - 100 },
+    ]);
+    // dinheiro já entrou; só a parte do cartão espera a maquininha
+    assert.deepEqual((await lancamentos(misto.data.id)).map((e) => [e.amountCents, e.status]),
+      [[100, 'paid'], [preco - 100, 'pending']]);
+    const body = { status: 'declined', nsu: '777', responseCode: '-2', terminalId: MAQ };
+    const r = await status('by-key/clover-0003', body);
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal(r.data.sale.id, misto.data.id);
+    assert.equal(r.data.sale.paymentStatus, 'declined');
+    assert.equal(r.data.sale.status, 'COMPLETED');
+    assert.equal(r.data.sale.paidAt, null);
+    assert.equal((await status('by-key/clover-0003', body)).data.changed, false);
+    assert.equal((await lancamentos(misto.data.id))[1].status, 'pending');
+    const recusadas = await api('GET', '/api/sales?paymentStatus=declined');
+    assert.deepEqual(recusadas.data.rows.map((v: any) => v.id), [misto.data.id]);
+    // nova tentativa aprovada depois da recusa vale
+    const ok = await status('by-key/clover-0003', { status: 'approved', nsu: '778', terminalId: MAQ });
+    assert.equal(ok.data.sale.paymentStatus, 'approved');
+    assert.equal(ok.data.settledEntries, 1);
+  });
+
+  await check('venda inexistente dá 404; corpo inválido e outra maquininha dão 400', async () => {
+    assert.equal((await status('nao-existe', { status: 'approved', terminalId: MAQ })).status, 404);
+    assert.equal((await status('by-key/nao-existe', { status: 'approved', terminalId: MAQ })).status, 404);
+    assert.equal((await status(emDinheiro.data.id, { status: 'ok', terminalId: MAQ })).status, 400);
+    assert.equal((await status(emDinheiro.data.id, { status: 'approved' })).status, 400);
+    assert.equal((await status(emDinheiro.data.id, { status: 'approved', terminalId: MAQ, paidAt: 'ontem' })).status, 400);
+    const outraMaq = await status(emDinheiro.data.id, { status: 'approved', terminalId: 'OUTRA-0001' });
+    assert.equal(outraMaq.status, 400);
+    assert.ok(/outra maquininha/.test(outraMaq.data.message));
+    assert.equal((await outra('POST', `/api/sales/${emDinheiro.data.id}/payment-status`,
+      { status: 'approved', terminalId: MAQ })).status, 404);
   });
 
   await app.close();

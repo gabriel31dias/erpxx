@@ -36,7 +36,8 @@ export default async function render({ content, can }) {
       receipt.company.address ? h('div', {}, receipt.company.address) : null,
       h('div', {}, `Venda #${sale.number} · ${sale.soldAt}`),
       h('div', {}, sale.seller ? `Vendedor externo: ${sale.seller.name}` : `Operador: ${sale.operator?.name ?? '—'}`),
-      sale.terminal ? h('div', {}, `Maquininha: ${sale.terminal.name || sale.terminal.serial}`) : null,
+      sale.terminal ? h('div', {}, `Maquininha: ${sale.terminal.name || sale.terminal.serial}`
+        + (sale.paymentStatus === 'approved' && sale.nsu ? ` · NSU ${sale.nsu}` : '')) : null,
       sale.seller ? h('div', {}, [
         sale.offline ? 'Gerada offline' : 'Gerada online',
         sale.paidInApp ? `Paga no app (${{ pix: 'PIX', cartao: 'cartão', boleto: 'boleto' }[sale.appPaymentMethod] ?? sale.appPaymentMethod})` : 'Não paga no app',
@@ -139,7 +140,13 @@ export default async function render({ content, can }) {
       !cancelada && can('pdv.cancelar_venda')
         ? h('button', { class: 'btn btn-outline-danger', onclick: cancelar }, 'Cancelar venda') : null),
 
-    sale.paymentStatus === 'unpaid' ? h('div', { class: 'alert alert-warning d-flex flex-wrap justify-content-between align-items-center gap-2' },
+    sale.paymentStatus === 'declined' ? h('div', { class: 'alert alert-danger' },
+      h('strong', {}, 'Pagamento recusado na maquininha. '),
+      [sale.responseCode ? `Código ${sale.responseCode}` : null, sale.nsu ? `NSU ${sale.nsu}` : null].filter(Boolean).join(' · '),
+      ' A venda segue concluída: cancele se o cliente não pagou de outro jeito.') : null,
+    sale.paymentStatus === 'pending' ? h('div', { class: 'alert alert-info' },
+      h('strong', {}, 'Pagamento pendente na maquininha. '), 'Ela ainda não informou se a cobrança foi aprovada.') : null,
+    sale.financeStatus === 'unpaid' ? h('div', { class: 'alert alert-warning d-flex flex-wrap justify-content-between align-items-center gap-2' },
       h('span', {}, h('strong', {}, 'Venda não paga. '),
         sale.dueDate ? `Vencimento em ${fmtDate(sale.dueDate)}.` : '',
         sale.paidInApp === false && sale.appPaymentMethod === 'pix' ? ' PIX aguardando confirmação.' : '',

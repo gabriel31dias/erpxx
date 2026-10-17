@@ -1,5 +1,5 @@
 // Gerado por tools/genpages.js — arquivos que ficam no aparelho.
-self.CACHE_VERSION = '9033144a0e';
+self.CACHE_VERSION = 'fe7a336a14';
 self.PRECACHE = [
   "/",
   "/aceitar-convite.html",

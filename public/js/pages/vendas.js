@@ -6,6 +6,12 @@ import { mount,
   todayStr,
 } from '../ui.js';
 
+// cobrança na maquininha (SiTef); "approved" não ganha selo
+const PAGAMENTO = {
+  pending: ['Pagamento pendente', 'info'],
+  declined: ['Pagamento recusado', 'danger'],
+};
+
 const STATUS = {
   COMPLETED: ['Concluída', 'success'],
   CANCELLED: ['Cancelada', 'danger'],
@@ -16,7 +22,7 @@ const STATUS = {
 export default async function render({ content, can, branchId }) {
   const state = {
     from: todayStr().slice(0, 8) + '01', to: todayStr(), status: '', q: '',
-    paymentMethodId: '', paid: '', page: 1, pageSize: 20, branchId,
+    paymentMethodId: '', paid: '', paymentStatus: '', page: 1, pageSize: 20, branchId,
     // vindo da tela de maquininhas: só as vendas daquele aparelho
     terminalId: new URLSearchParams(location.search).get('terminalId') || '',
   };
@@ -49,6 +55,14 @@ export default async function render({ content, can, branchId }) {
   ], { class: 'form-select' });
   pago.onchange = () => { state.paid = pago.value; state.page = 1; carregar(); };
 
+  const cobranca = select([
+    { value: '', label: 'Qualquer cobrança' },
+    { value: 'declined', label: 'Recusadas na maquininha' },
+    { value: 'pending', label: 'Pendentes na maquininha' },
+    { value: 'approved', label: 'Aprovadas' },
+  ], { class: 'form-select' });
+  cobranca.onchange = () => { state.paymentStatus = cobranca.value; state.page = 1; carregar(); };
+
   const busca = input({ type: 'search', class: 'form-control', placeholder: 'Número, cliente ou produto' });
   busca.oninput = debounce(() => { state.q = busca.value; state.page = 1; carregar(); });
 
@@ -64,7 +78,8 @@ export default async function render({ content, can, branchId }) {
         h('div', { class: 'col-6 col-md-2' }, status),
         h('div', { class: 'col-6 col-md-2' }, metodo),
         h('div', { class: 'col-6 col-md-2' }, pago),
-        h('div', { class: 'col-12 col-md-2' }, busca)),
+        h('div', { class: 'col-6 col-md-2' }, cobranca),
+        h('div', { class: 'col-6 col-md-2' }, busca)),
       lista, rodape)));
 
   async function carregar() {
@@ -95,7 +110,10 @@ export default async function render({ content, can, branchId }) {
           label: 'Situação',
           cell: (s) => h('div', { class: 'd-flex flex-wrap gap-1' },
             h('span', { class: `badge text-bg-${STATUS[s.status]?.[1] ?? 'light'}` }, STATUS[s.status]?.[0] ?? s.status),
-            s.paymentStatus === 'unpaid'
+            PAGAMENTO[s.paymentStatus]
+              ? h('span', { class: `badge text-bg-${PAGAMENTO[s.paymentStatus][1]}` }, PAGAMENTO[s.paymentStatus][0])
+              : null,
+            s.financeStatus === 'unpaid'
               ? h('span', { class: 'badge text-bg-warning', title: s.dueDate ? `Vence em ${fmtDate(s.dueDate)}` : '' },
                 `Não paga${s.dueDate ? ` · vence ${fmtDate(s.dueDate)}` : ''}`)
               : null),
