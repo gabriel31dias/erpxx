@@ -30,6 +30,7 @@ import { PricingModule } from './modules/pricing';
 import { CreditModule } from './modules/credit';
 import { FieldModule } from './modules/field';
 import { PlatformModule } from './modules/platform';
+import { TerminalsModule } from './modules/terminals';
 
 // O tema Riho fica na pasta do starter kit; se copiado para dentro do projeto, usa a cópia local.
 const localAssets = join(__dirname, '..', 'public', 'assets');
@@ -48,7 +49,7 @@ const themeAssets = existsSync(localAssets) ? localAssets : join(__dirname, '..'
       { rootPath: join(__dirname, '..', 'public'), exclude: ['/api/{*path}'] },
     ),
     AuthModule, CatalogModule, CrmModule, StockModule, SalesModule, CashModule,
-    FinanceModule, ReportsModule, CompanyModule, UsersModule, BillingModule, ImportsModule, PaymentsModule, FiscalModule, MiscModule, SellersModule, AttachmentsModule, PricingModule, CreditModule, FieldModule, PlatformModule,
+    FinanceModule, ReportsModule, CompanyModule, UsersModule, BillingModule, ImportsModule, PaymentsModule, FiscalModule, MiscModule, SellersModule, AttachmentsModule, PricingModule, CreditModule, FieldModule, PlatformModule, TerminalsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

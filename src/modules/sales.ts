@@ -2,7 +2,9 @@ import {
   BadRequestException, Body, Controller, ForbiddenException, Get, Inject, Injectable, Module,
   NotFoundException, Param, Post, Query, Req,
 } from '@nestjs/common';
-import { IsArray, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
+import {
+  IsArray, IsInt, IsNumber, IsOptional, IsString, Matches, MaxLength, Min, MinLength, ValidateNested,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import type { Request } from 'express';
 import { PRISMA, Db, Tx, TX } from '../common/prisma.service';
@@ -46,6 +48,12 @@ export class SaleDto {
   @IsOptional() @IsString() notes?: string;
   /** Reenvio por timeout/fila offline não pode virar duas vendas. */
   @IsOptional() @IsString() idempotencyKey?: string;
+  /**
+   * Id da maquininha (número de série) em que a venda foi feita. A primeira venda
+   * de um id novo cadastra a maquininha sozinha; as seguintes só atualizam o status.
+   */
+  @IsOptional() @IsString() @MaxLength(64) @Matches(/^[\w.:-]+$/, { message: 'terminalId inválido.' })
+  terminalId?: string;
   @IsArray() @ValidateNested({ each: true }) @Type(() => SaleItemDto) items!: SaleItemDto[];
   @IsArray() @ValidateNested({ each: true }) @Type(() => SalePaymentDto) payments!: SalePaymentDto[];
 }
@@ -79,10 +87,17 @@ interface PricedItem {
   discountCents: number; totalCents: number; gross: number;
 }
 
+/** Modelo do aparelho no User-Agent do Android: "Dalvik/2.1.0 (Linux; U; Android 13; C406 Build/…)" → "C406". */
+export function deviceModel(userAgent?: string): string | null {
+  const m = userAgent?.match(/Android [^;)]*;\s*([^;)]+?)\s+Build\//);
+  return m ? m[1].slice(0, 60) : null;
+}
+
 export const SALE_INCLUDE = {
   customer: { select: { id: true, name: true, document: true, phone: true } },
   operator: { select: { id: true, name: true } },
   seller: { select: { id: true, name: true } },
+  terminal: { select: { id: true, name: true, serial: true } },
   branch: { select: { id: true, name: true } },
   items: { include: { product: { select: { id: true, name: true, sku: true } } } },
   payments: true,
@@ -112,7 +127,7 @@ export class SalesService {
     private credit: CreditService,
   ) {}
 
-  async create(a: SaleActor, dto: SaleDto, ip?: string, soldAt?: string, ext?: ExtSaleInfo) {
+  async create(a: SaleActor, dto: SaleDto, ip?: string, soldAt?: string, ext?: ExtSaleInfo, userAgent?: string) {
     await this.plans.assertActive(a.companyId);
     if (!dto.items?.length) throw new BadRequestException('A venda não tem itens.');
     if (!dto.payments?.length) throw new BadRequestException('Informe ao menos uma forma de pagamento.');
@@ -189,11 +204,28 @@ export class SalesService {
         const last = await tx.sale.aggregate({ where: { companyId: a.companyId }, _max: { number: true } });
         const number = (last._max.number ?? 0) + 1;
 
+        // maquininha: a primeira venda com um id novo já a cadastra (a trava da empresa
+        // acima serializa o upsert, então duas vendas da mesma máquina nova não colidem)
+        const serial = dto.terminalId?.trim();
+        const terminal = serial ? await tx.terminal.upsert({
+          where: { companyId_serial: { companyId: a.companyId, serial } },
+          create: {
+            companyId: a.companyId, serial, model: deviceModel(userAgent), branchId,
+            lastSaleAt: at, lastOperatorId: a.userId, lastIp: ip ?? null,
+          },
+          update: {
+            lastSeenAt: new Date(), lastSaleAt: at, branchId, active: true,
+            lastOperatorId: a.userId, lastIp: ip ?? null,
+            ...(deviceModel(userAgent) ? { model: deviceModel(userAgent) } : {}),
+          },
+        }) : null;
+
         const created = await tx.sale.create({
           data: {
             companyId: a.companyId, branchId, cashSessionId: session?.id ?? null,
             customerId: dto.customerId || null, priceListId,
-            operatorId: a.userId, sellerId: a.sellerId, number, status: 'COMPLETED',
+            operatorId: a.userId, sellerId: a.sellerId, terminalId: terminal?.id ?? null,
+            number, status: 'COMPLETED',
             subtotalCents: subtotal, discountCents: discountTotal, totalCents: total,
             costTotalCents: items.reduce((s, i) => s + Math.round(i.unitCostCents * i.quantity), 0),
             receivedCents: receivedCash, changeCents: change,
@@ -432,6 +464,7 @@ export class SalesController {
     @Query('customerId') customerId?: string,
     @Query('operatorId') operatorId?: string,
     @Query('sellerId') sellerId?: string,
+    @Query('terminalId') terminalId?: string,
     @Query('branchId') branchId?: string,
     @Query('paymentMethodId') paymentMethodId?: string,
     @Query('paid') paid?: string, // 'yes' | 'no'
@@ -448,6 +481,7 @@ export class SalesController {
       ...(customerId ? { customerId } : {}),
       ...(operatorId ? { operatorId } : {}),
       ...(sellerId ? { sellerId } : {}),
+      ...(terminalId ? { terminalId } : {}),
       ...(paymentMethodId ? { payments: { some: { paymentMethodId } } } : {}),
       ...(paid === 'no' ? { status: 'COMPLETED', finEntries: { some: UNPAID } } : {}),
       ...(paid === 'yes' ? { status: 'COMPLETED', finEntries: { none: UNPAID } } : {}),
@@ -510,7 +544,7 @@ export class SalesController {
   create(@CurrentUser() u: SessionUser, @Body() dto: SaleDto, @Req() req: Request) {
     return this.sales.create({
       companyId: u.companyId, branchId: u.branchId, role: u.role, userId: u.sub, sellerId: null,
-    }, dto, req.ip);
+    }, dto, req.ip, undefined, undefined, req.headers['user-agent']);
   }
 
   /** Cancelamento nunca apaga: muda status, estorna estoque e registra tudo. */

@@ -1,5 +1,5 @@
 // Gerado por tools/genpages.js — arquivos que ficam no aparelho.
-self.CACHE_VERSION = '487d6b35af';
+self.CACHE_VERSION = '9033144a0e';
 self.PRECACHE = [
   "/",
   "/aceitar-convite.html",
@@ -1053,6 +1053,7 @@ self.PRECACHE = [
   "/assets/svg/icon-sprite.svg#fill-task",
   "/assets/svg/icon-sprite.svg#fill-to-do",
   "/assets/svg/icon-sprite.svg#fill-user",
+  "/assets/svg/icon-sprite.svg#fill-widget",
   "/assets/svg/icon-sprite.svg#notification-header",
   "/assets/svg/icon-sprite.svg#search-header",
   "/assets/svg/icon-sprite.svg#stroke-bonus-kit",
@@ -1068,6 +1069,7 @@ self.PRECACHE = [
   "/assets/svg/icon-sprite.svg#stroke-task",
   "/assets/svg/icon-sprite.svg#stroke-to-do",
   "/assets/svg/icon-sprite.svg#stroke-user",
+  "/assets/svg/icon-sprite.svg#stroke-widget",
   "/assinatura.html",
   "/auditoria.html",
   "/bancos.html",
@@ -1126,6 +1128,7 @@ self.PRECACHE = [
   "/js/pages/fornecedores.js",
   "/js/pages/importacao.js",
   "/js/pages/lancamento.js",
+  "/js/pages/maquininhas.js",
   "/js/pages/notas.js",
   "/js/pages/notificacoes.js",
   "/js/pages/onboarding.js",
@@ -1150,6 +1153,7 @@ self.PRECACHE = [
   "/lancamento.html",
   "/login.html",
   "/manifest.webmanifest",
+  "/maquininhas.html",
   "/notas.html",
   "/notificacoes.html",
   "/onboarding.html",

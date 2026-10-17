@@ -17,6 +17,8 @@ export default async function render({ content, can, branchId }) {
   const state = {
     from: todayStr().slice(0, 8) + '01', to: todayStr(), status: '', q: '',
     paymentMethodId: '', paid: '', page: 1, pageSize: 20, branchId,
+    // vindo da tela de maquininhas: só as vendas daquele aparelho
+    terminalId: new URLSearchParams(location.search).get('terminalId') || '',
   };
   const cards = h('div', { class: 'row' });
   const lista = h('div', {});
@@ -52,6 +54,7 @@ export default async function render({ content, can, branchId }) {
 
   mount(content,
     pageTitle('Vendas',
+      state.terminalId ? h('a', { class: 'btn btn-outline-secondary', href: '/vendas.html' }, icon('x', 16), ' Só uma maquininha') : null,
       can('pdv.acessar') ? h('a', { class: 'btn btn-primary', href: '/pdv.html' }, icon('shopping-cart', 16), ' PDV') : null),
     cards,
     card(null, h('div', {},

@@ -36,6 +36,7 @@ export default async function render({ content, can }) {
       receipt.company.address ? h('div', {}, receipt.company.address) : null,
       h('div', {}, `Venda #${sale.number} · ${sale.soldAt}`),
       h('div', {}, sale.seller ? `Vendedor externo: ${sale.seller.name}` : `Operador: ${sale.operator?.name ?? '—'}`),
+      sale.terminal ? h('div', {}, `Maquininha: ${sale.terminal.name || sale.terminal.serial}`) : null,
       sale.seller ? h('div', {}, [
         sale.offline ? 'Gerada offline' : 'Gerada online',
         sale.paidInApp ? `Paga no app (${{ pix: 'PIX', cartao: 'cartão', boleto: 'boleto' }[sale.appPaymentMethod] ?? sale.appPaymentMethod})` : 'Não paga no app',

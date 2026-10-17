@@ -164,6 +164,7 @@ model Company {
   routeStops     RouteStop[]
   visits         Visit[]
   sellerPings    SellerPing[]
+  terminals      Terminal[]
   notifications  Notification[]
   auditLogs      AuditLog[]
   idempotency    IdempotencyKey[]
@@ -199,6 +200,7 @@ model Branch {
   sessions  CashSession[]
   finEntries FinanceEntry[]
   fiscalDocs FiscalDocument[]
+  terminals  Terminal[]
 
   @@index([companyId])
 }
@@ -693,6 +695,7 @@ model Sale {
   paidInApp        Boolean @default(false) // pagamento já feito no app do vendedor
   appPaymentMethod String? // pix | cartao | boleto (quando paidInApp)
   appPaymentRef    String? // id da transação/boleto no app, para conciliação
+  terminalId       String? // maquininha (POS) em que a venda foi feita
   number         Int
   status         String  @default("COMPLETED") // OPEN|COMPLETED|CANCELLED|REFUNDED
   subtotalCents  Int     @default(0)
@@ -718,6 +721,7 @@ model Sale {
   priceList PriceList?  @relation(fields: [priceListId], references: [id])
   operator User?        @relation("operator", fields: [operatorId], references: [id])
   seller   Seller?      @relation(fields: [sellerId], references: [id])
+  terminal Terminal?    @relation(fields: [terminalId], references: [id])
 
   items       SaleItem[]
   payments    SalePayment[]
@@ -731,6 +735,36 @@ model Sale {
   @@index([companyId, customerId])
   @@index([cashSessionId])
   @@index([companyId, sellerId, soldAt])
+  @@index([companyId, terminalId, soldAt])
+}
+
+/**
+ * Maquininha (POS) integrada. Nasce sozinha na primeira venda que chega com o
+ * `terminalId` do aparelho; a partir daí cada venda atualiza o "visto por último".
+ */
+model Terminal {
+  id          String   @id @default(cuid())
+  companyId   String
+  serial      String // id que a maquininha manda em `terminalId` (número de série)
+  name        String? // apelido dado no ERP ("Caixa 2", "Balcão")
+  model       String? // modelo do aparelho, lido do User-Agent (ex.: C406)
+  branchId    String? // filial da última venda
+  active      Boolean  @default(true) // desativada no ERP: some da lista de ativas, volta ao vender
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  lastSaleAt  String? // "YYYY-MM-DD HH:mm" no fuso da empresa
+  lastOperatorId String?
+  lastIp      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch  Branch? @relation(fields: [branchId], references: [id])
+  sales   Sale[]
+
+  @@unique([companyId, serial])
+  @@index([companyId, lastSeenAt])
 }
 
 model SaleItem {

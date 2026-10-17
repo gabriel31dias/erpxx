@@ -41,6 +41,7 @@ const MENU = [
   { key: 'vendas', href: '/vendas.html', label: 'Vendas', icon: 'file', perm: 'venda.visualizar' },
   { key: 'caixa', href: '/caixa.html', label: 'Caixa', icon: 'bonus-kit', perm: 'caixa.visualizar' },
   { key: 'campo', href: '/campo.html', label: 'Mapa de campo', icon: 'maps', perm: 'roteiro.visualizar' },
+  { key: 'maquininhas', href: '/maquininhas.html', label: 'Maquininhas', icon: 'widget', perm: 'venda.visualizar' },
   { group: 'Cadastros' },
   { key: 'produtos', href: '/produtos.html', label: 'Produtos', icon: 'to-do', perm: 'produto.visualizar' },
   { key: 'estoque', href: '/estoque.html', label: 'Estoque', icon: 'charts', perm: 'estoque.visualizar' },
@@ -268,6 +269,7 @@ const LEAFLET_CSS = '<link rel="stylesheet" href="/assets/css/vendors/leaflet.cs
 const pages = [
   ['dashboard', 'Dashboard', 'index.html', APEX],
   ['vendas', 'Vendas', 'vendas.html', ''],
+  ['maquininhas', 'Maquininhas', 'maquininhas.html', ''],
   ['venda', 'Venda', 'venda.html', ''],
   ['caixa', 'Caixa', 'caixa.html', ''],
   ['sessoes', 'Aberturas e fechamentos', 'sessoes.html', ''],

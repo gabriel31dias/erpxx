@@ -1257,6 +1257,54 @@ async function main() {
     assert.equal((await ext('GET', '/api/ext/sales')).status, 401);
   });
 
+  // ---------- maquininhas ----------
+  console.log('\nMaquininhas');
+  if ((await api('GET', '/api/cash/current')).data?.session?.status !== 'open') {
+    await api('POST', '/api/cash/open', { registerId, openingCents: 0 });
+  }
+  const preco = (await db.product.findUniqueOrThrow({ where: { id: productId } })).priceCents;
+  const naMaquina = (terminalId?: string) => api('POST', '/api/sales', {
+    ...(terminalId ? { terminalId } : {}),
+    items: [{ productId, quantity: 1 }],
+    payments: [{ paymentMethodId: pix.id, amountCents: preco }],
+  });
+
+  await check('primeira venda com terminalId vincula a maquininha sozinha', async () => {
+    const r = await naMaquina('C406-SN-0001');
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.terminal.serial, 'C406-SN-0001');
+    const lista = await api('GET', '/api/terminals');
+    const t = lista.data.rows.find((x: any) => x.serial === 'C406-SN-0001');
+    assert.ok(t);
+    assert.equal(t.status, 'online');
+    assert.equal(t.todayCount, 1);
+  });
+
+  await check('vendas seguintes da mesma maquininha não duplicam o cadastro', async () => {
+    await naMaquina('C406-SN-0001');
+    await naMaquina(); // PDV web: sem maquininha
+    const lista = await api('GET', '/api/terminals');
+    const t = lista.data.rows.filter((x: any) => x.serial === 'C406-SN-0001');
+    assert.equal(t.length, 1);
+    assert.equal(t[0].todayCount, 2);
+    const vendas = await api('GET', `/api/sales?terminalId=${t[0].id}`);
+    assert.equal(vendas.data.total, 2);
+  });
+
+  await check('apelido e desativação; vender de novo reativa', async () => {
+    const [t] = (await api('GET', '/api/terminals')).data.rows;
+    await api('PATCH', `/api/terminals/${t.id}`, { name: 'Balcão', active: false });
+    assert.equal((await api('GET', '/api/terminals')).data.rows[0].status, 'disabled');
+    const r = await naMaquina(t.serial);
+    assert.equal(r.data.terminal.name, 'Balcão');
+    assert.equal((await api('GET', '/api/terminals')).data.rows[0].status, 'online');
+  });
+
+  await check('terminalId inválido é recusado e maquininha de outra empresa não aparece', async () => {
+    assert.equal((await naMaquina('id com espaço')).status, 400);
+    assert.equal((await outra('GET', '/api/terminals')).data.rows.length, 0);
+  });
+
   await app.close();
   gateway.close();
   await db.$disconnect();
