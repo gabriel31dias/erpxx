@@ -6,7 +6,7 @@ const TENANT_MODELS = new Set([
   'Branch', 'User', 'Seller', 'Invite', 'Category', 'Product', 'Stock', 'StockMovement', 'Supplier',
   'StockEntry', 'StockEntryItem', 'Customer', 'PaymentMethod', 'Sale', 'SaleItem', 'SalePayment', 'SaleAttachment',
   'CashRegister', 'CashSession', 'CashMovement', 'FinancialCategory', 'FinanceEntry',
-  'Notification', 'AuditLog', 'Subscription', 'IdempotencyKey',
+  'Notification', 'AuditLog', 'Subscription', 'IdempotencyKey', 'MenuOrder',
 ]);
 
 const GUARDED_OPS = new Set([

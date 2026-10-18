@@ -25,6 +25,14 @@ const UNPAID = { status: 'pending', deletedAt: null };
 const TERMINAL_ID = /^[\w.:-]+$/;
 /** Formas cobradas na maquininha (SiTef): a venda espera a aprovação. */
 const ON_TERMINAL = ['pix', 'debito', 'credito'];
+/**
+ * Ator da venda que nasce de um pedido do cardápio entregue. O preço já foi calculado
+ * no servidor quando o pedido entrou (tamanho, adicionais, meio a meio), então vale como veio;
+ * e a comida já saiu, então estoque zerado não barra o registro (fica negativo para repor).
+ */
+export const MENU_ROLE = 'cardapio';
+/** Produto interno que leva a taxa de entrega do pedido para a venda (não mexe em estoque). */
+export const MENU_FEE_SKU = 'CARDAPIO-ENTREGA';
 
 export class SaleItemDto {
   @IsString() productId!: string;
@@ -35,6 +43,11 @@ export class SaleItemDto {
    * desconto — ou em venda offline do app quando o preço mudou depois dela.
    */
   @IsOptional() @IsInt() @Min(0) unitPriceCents?: number;
+  /**
+   * Nome do item como o cliente pediu no cardápio ("Calabresa (Grande) + Borda: Catupiry").
+   * Sem decorator de propósito: o ValidationPipe tira do corpo da requisição, e só vale com MENU_ROLE.
+   */
+  menuName?: string;
 }
 
 export class SalePaymentDto {
@@ -99,6 +112,7 @@ interface PricedItem {
   productId: string; name: string; unit: string; quantity: number;
   unitPriceCents: number; basePriceCents: number; priceSource: string; unitCostCents: number;
   discountCents: number; totalCents: number; gross: number;
+  noStock?: boolean;
 }
 
 /** Modelo do aparelho no User-Agent do Android: "Dalvik/2.1.0 (Linux; U; Android 13; C406 Build/…)" → "C406". */
@@ -258,7 +272,7 @@ export class SalesService {
             receivedCents: receivedCash, changeCents: change,
             notes: dto.notes || null, soldAt: at, ...extCols,
             items: {
-              create: items.map(({ gross, ...i }) => ({ ...i, companyId: a.companyId })),
+              create: items.map(({ gross, noStock, ...i }) => ({ ...i, companyId: a.companyId })),
             },
             payments: { create: payments.map((p) => ({ ...p, companyId: a.companyId })) },
           },
@@ -267,10 +281,11 @@ export class SalesService {
 
         if (settings.stockControl) {
           for (const item of items) {
+            if (item.noStock) continue;
             await this.stock.move(tx as Tx, {
               companyId: a.companyId, branchId, productId: item.productId, type: 'VENDA',
               quantity: item.quantity, reason: `Venda #${number}`, refType: 'Sale', refId: created.id,
-              userId: a.userId, at, allowNegative: settings.allowNegativeStock,
+              userId: a.userId, at, allowNegative: settings.allowNegativeStock || a.role === MENU_ROLE,
             });
           }
         }
@@ -398,7 +413,9 @@ export class SalesService {
       let unitPrice = resolved.priceCents;
       let source: string = resolved.source;
       if (i.unitPriceCents !== undefined && i.unitPriceCents !== resolved.priceCents) {
-        if (can(a.role, 'pdv.desconto')) {
+        if (a.role === MENU_ROLE) {
+          source = 'CARDAPIO';
+        } else if (can(a.role, 'pdv.desconto')) {
           source = 'MANUAL';
         } else if (ext?.offline && await this.priceChangedAfter(a.companyId, product.id, dto.customerId, at)) {
           source = 'OFFLINE';
@@ -413,11 +430,12 @@ export class SalesService {
         throw new BadRequestException(`Desconto maior que o valor do item "${product.name}".`);
       }
       items.push({
-        productId: product.id, name: product.name, unit: product.unit, quantity,
+        productId: product.id, name: (a.role === MENU_ROLE && i.menuName) || product.name, unit: product.unit, quantity,
         unitPriceCents: unitPrice, basePriceCents: resolved.basePriceCents, priceSource: source,
         unitCostCents: product.costCents,
         discountCents: discount, totalCents: itemTotalCents(unitPrice, quantity, discount),
         gross: Math.round(unitPrice * quantity),
+        noStock: a.role === MENU_ROLE && product.sku === MENU_FEE_SKU,
       });
     }
 

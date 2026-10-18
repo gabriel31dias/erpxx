@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  /* Hide scrollbar for Chrome, Safari and Opera */
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  /* Hide scrollbar for IE, Edge and Firefox */
+  .scrollbar-none {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+  }
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #0B0B0C;
+  color: #FFFFFF;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Custom smooth transitions */
+button, a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* screen entrance animations. CSS (not framer) on purpose: no transform remains after
+   the animation ends, so position:fixed footers/nav inside the screen keep working */
+@keyframes sheet-in {
+  from { opacity: 0; transform: translateY(40px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+.anim-sheet-in { animation: sheet-in 320ms cubic-bezier(0.22, 1, 0.36, 1); }
+.anim-fade-in  { animation: fade-in 220ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .anim-sheet-in, .anim-fade-in { animation: none; }
+}
+
+/* flechinha das categorias: empurrãozinho pro lado pra sugerir arrastar */
+@keyframes nudge {
+  0%, 100% { transform: translateX(0); }
+  50%      { transform: translateX(3px); }
+}
+@keyframes nudge-left {
+  0%, 100% { transform: translateX(0); }
+  50%      { transform: translateX(-3px); }
+}
+.animate-nudge { animation: nudge 1.4s ease-in-out infinite; }
+.animate-nudge-left { animation: nudge-left 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-nudge, .animate-nudge-left { animation: none; }
+}

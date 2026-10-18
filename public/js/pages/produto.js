@@ -1,10 +1,53 @@
 // Cadastro/edição de produto em tela própria + histórico de movimentações.
-import { get, patch, post } from '../api.js';
+import { get, patch, post, uploadImage } from '../api.js';
 import { pageTitle } from '../shell.js';
 import { mount,
-  card, centsToInput, field, fmtBRL, fmtQty, h, input, moneyToCents, parseQty, refreshIcons,
+  card, centsToInput, field, fmtBRL, fmtQty, h, input, moneyInput, moneyToCents, parseQty, refreshIcons,
   select, textarea, toast,
 } from '../ui.js';
+
+// ---------- cardápio digital: listas de {name, priceCents} editáveis ----------
+function linhas(itens, { nome = 'Nome', vazio = 'Nenhum item.' } = {}) {
+  const corpo = h('div', {});
+  const linha = (it = {}) => {
+    const n = input({ value: it.name ?? '', placeholder: nome, class: 'form-control form-control-sm' });
+    const v = moneyInput({ value: centsToInput(it.priceCents ?? 0), class: 'form-control form-control-sm', style: 'max-width:120px' });
+    const row = h('div', { class: 'd-flex gap-2 mb-2 lf-linha' }, n, v,
+      h('button', { type: 'button', class: 'btn btn-sm btn-outline-danger', 'aria-label': 'Remover', onclick: () => row.remove() }, '×'));
+    row.valor = () => ({ name: n.value.trim(), priceCents: moneyToCents(v.value) });
+    corpo.append(row);
+  };
+  itens.forEach(linha);
+  return {
+    node: h('div', {}, corpo,
+      h('button', { type: 'button', class: 'btn btn-sm btn-outline-primary', onclick: () => linha() }, '+ Adicionar'),
+      itens.length ? null : h('div', { class: 'form-text' }, vazio)),
+    value: () => [...corpo.children].map((r) => r.valor()).filter((x) => x.name),
+  };
+}
+
+/** grupos de escolha (ex.: Borda — mín 0, máx 1) com seus itens */
+function grupos(lista) {
+  const corpo = h('div', {});
+  const grupo = (g = { min: 0, max: 1, items: [] }) => {
+    const nome = input({ value: g.name ?? '', placeholder: 'Ex.: Borda', class: 'form-control form-control-sm' });
+    const min = input({ type: 'number', min: 0, max: 20, value: g.min, class: 'form-control form-control-sm', style: 'max-width:80px' });
+    const max = input({ type: 'number', min: 1, max: 20, value: g.max, class: 'form-control form-control-sm', style: 'max-width:80px' });
+    const itens = linhas(g.items, { nome: 'Opção' });
+    const box = h('div', { class: 'border rounded p-2 mb-2' },
+      h('div', { class: 'd-flex gap-2 mb-2 align-items-center' }, nome,
+        h('small', {}, 'mín'), min, h('small', {}, 'máx'), max,
+        h('button', { type: 'button', class: 'btn btn-sm btn-outline-danger', onclick: () => box.remove() }, 'Remover grupo')),
+      itens.node);
+    box.valor = () => ({ name: nome.value.trim(), min: Number(min.value) || 0, max: Math.max(Number(max.value) || 1, 1), items: itens.value() });
+    corpo.append(box);
+  };
+  lista.forEach(grupo);
+  return {
+    node: h('div', {}, corpo, h('button', { type: 'button', class: 'btn btn-sm btn-outline-primary', onclick: () => grupo() }, '+ Grupo de escolha')),
+    value: () => [...corpo.children].map((b) => b.valor()).filter((g) => g.name && g.items.length),
+  };
+}
 
 const UNITS = ['UN', 'KG', 'G', 'L', 'ML', 'CX', 'PCT'];
 
@@ -30,6 +73,7 @@ export default async function render({ content, can, branchId }) {
     id ? get(`/products/${id}`, { branchId }) : Promise.resolve(null),
   ]);
   const p = detalhe?.product ?? {};
+  const opcoes = JSON.parse(p.menuOptions || '{}');
   const editavel = id ? can('produto.editar') : can('produto.criar');
 
   const f = {
@@ -49,7 +93,7 @@ export default async function render({ content, can, branchId }) {
     price: input({ inputmode: 'decimal', value: centsToInput(p.priceCents ?? 0) }),
     minStock: input({ inputmode: 'decimal', value: String(p.minStock ?? 0) }),
     maxStock: input({ inputmode: 'decimal', value: String(p.maxStock ?? 0) }),
-    imageUrl: input({ value: p.imageUrl ?? '', placeholder: 'https://…' }),
+    imageUrl: input({ value: p.imageUrl ?? '', placeholder: 'https://… ou envie uma foto' }),
     description: textarea({ value: p.description ?? '' }),
     active: select([
       { value: 'true', label: 'Ativo', selected: p.active !== false },
@@ -70,6 +114,28 @@ export default async function render({ content, can, branchId }) {
     cofinsAliq: input({ value: bpToPct(p.cofinsAliqBp), placeholder: '%', inputmode: 'decimal' }),
     netWeight: input({ value: p.netWeight ?? '', placeholder: 'kg', inputmode: 'decimal' }),
     grossWeight: input({ value: p.grossWeight ?? '', placeholder: 'kg', inputmode: 'decimal' }),
+    // ---- cardápio digital ----
+    menuVisible: select([
+      { value: 'false', label: 'Não', selected: !p.menuVisible },
+      { value: 'true', label: 'Sim', selected: !!p.menuVisible },
+    ]),
+    oldPrice: moneyInput({ value: p.oldPriceCents == null ? '' : centsToInput(p.oldPriceCents), placeholder: 'sem promoção' }),
+    position: input({ type: 'number', value: p.position ?? 0 }),
+  };
+  const menu = {
+    sizes: linhas(opcoes.sizes ?? [], { nome: 'Ex.: Grande', vazio: 'Sem tamanhos: vale o preço de venda.' }),
+    additionals: linhas(opcoes.additionals ?? [], { nome: 'Ex.: Bacon' }),
+    optionGroups: grupos(opcoes.optionGroups ?? []),
+  };
+
+  // foto: envia e preenche o campo de URL
+  const foto = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', class: 'd-none' });
+  const enviarFoto = h('button', { type: 'button', class: 'btn btn-outline-primary', onclick: () => foto.click() }, 'Enviar foto');
+  foto.onchange = async () => {
+    if (!foto.files[0]) return;
+    enviarFoto.disabled = true;
+    try { f.imageUrl.value = await uploadImage(foto.files[0]); toast('Foto enviada. Salve o produto.'); }
+    catch (e) { toast(e.message, 'error'); } finally { enviarFoto.disabled = false; foto.value = ''; }
   };
 
   const margem = h('div', { class: 'form-text' });
@@ -102,6 +168,7 @@ export default async function render({ content, can, branchId }) {
     field('Situação', f.active, { col: 'col-6 col-md-3' }),
     id ? null : field('Estoque inicial', f.initialStock, { col: 'col-6 col-md-3', help: 'Gera uma movimentação de entrada.' }),
     field('Imagem (URL)', f.imageUrl, { col: 'col-12 col-md-6' }),
+    h('div', { class: 'col-12 col-md-6 d-flex align-items-end gap-2' }, editavel ? enviarFoto : null, foto),
     field('Descrição', f.description, { col: 'col-12' }),
     // ---- Dados fiscais (NF-e) ----
     h('div', { class: 'col-12 mt-2' }, h('hr', {}),
@@ -121,6 +188,16 @@ export default async function render({ content, can, branchId }) {
     h('div', { class: 'col-6 col-md-3' }),
     field('Peso líquido (kg)', f.netWeight, { col: 'col-6 col-md-3' }),
     field('Peso bruto (kg)', f.grossWeight, { col: 'col-6 col-md-3' }),
+    // ---- Cardápio digital ----
+    h('div', { class: 'col-12 mt-2' }, h('hr', {}),
+      h('h6', { class: 'txt-primary mb-0' }, 'Cardápio digital'),
+      h('small', { class: 'txt-secondary' }, 'Como o produto aparece no app de pedidos. O preço é sempre conferido no servidor.')),
+    field('Mostrar no cardápio', f.menuVisible, { col: 'col-6 col-md-3' }),
+    field('Preço "de" (R$)', f.oldPrice, { col: 'col-6 col-md-3', help: 'Aparece riscado, como promoção.' }),
+    field('Ordem no cardápio', f.position, { col: 'col-6 col-md-3' }),
+    h('div', { class: 'col-12 col-md-6' }, h('div', { class: 'form-label' }, 'Tamanhos (pizza: cada um com seu preço)'), menu.sizes.node),
+    h('div', { class: 'col-12 col-md-6' }, h('div', { class: 'form-label' }, 'Adicionais'), menu.additionals.node),
+    h('div', { class: 'col-12' }, h('div', { class: 'form-label' }, 'Escolhas com limite'), menu.optionGroups.node),
     h('div', { class: 'col-12 d-flex gap-2 justify-content-end' },
       h('a', { class: 'btn btn-light', href: '/produtos.html' }, 'Voltar'),
       editavel ? salvar : null));
@@ -160,6 +237,11 @@ export default async function render({ content, can, branchId }) {
         netWeight: f.netWeight.value ? parseQty(f.netWeight.value) : undefined,
         grossWeight: f.grossWeight.value ? parseQty(f.grossWeight.value) : undefined,
         ...(id ? {} : { initialStock: parseQty(f.initialStock.value) }),
+        // cardápio digital
+        menuVisible: f.menuVisible.value === 'true',
+        oldPriceCents: f.oldPrice.value.trim() ? moneyToCents(f.oldPrice.value) : null,
+        position: Number(f.position.value) || 0,
+        menuOptions: { sizes: menu.sizes.value(), additionals: menu.additionals.value(), optionGroups: menu.optionGroups.value() },
       };
       const saved = id ? await patch(`/products/${id}`, body) : await post('/products', body);
       toast('Produto salvo.');

@@ -17,6 +17,7 @@ process.env.PIX_API_BASE = 'http://127.0.0.1:47811';
 process.env.VIACEP_URL = 'http://127.0.0.1:47811';
 process.env.GEOCODER_URL = 'http://127.0.0.1:47811';
 process.env.UPLOADS_DIR = require('path').join(__dirname, '..', 'data', 'test-uploads');
+process.env.MENU_IMAGES_DIR = require('path').join(process.env.UPLOADS_DIR, 'menu');
 
 import * as assert from 'assert';
 import { execSync } from 'child_process';
@@ -1395,6 +1396,249 @@ async function main() {
     assert.ok(/outra maquininha/.test(outraMaq.data.message));
     assert.equal((await outra('POST', `/api/sales/${emDinheiro.data.id}/payment-status`,
       { status: 'approved', terminalId: MAQ })).status, 404);
+  });
+
+  // ---------- cardápio digital ----------
+  console.log('\nCardápio digital');
+  const { priceCart } = await import('../src/modules/menu');
+  const sabores = [
+    { id: 'cal', name: 'Calabresa', categoryId: 'pz', priceCents: 0, available: true, additionals: [],
+      sizes: [{ name: 'Média', priceCents: 4000 }, { name: 'Grande', priceCents: 5000 }],
+      optionGroups: [{ name: 'Borda', min: 0, max: 1, items: [{ name: 'Catupiry', priceCents: 800 }, { name: 'Cheddar', priceCents: 900 }] }] },
+    { id: 'qua', name: 'Quatro Queijos', categoryId: 'pz', priceCents: 0, available: true, additionals: [], optionGroups: [],
+      sizes: [{ name: 'Média', priceCents: 4500 }, { name: 'Grande', priceCents: 5800 }] },
+    { id: 'xt', name: 'X-Tudo', categoryId: 'bg', priceCents: 3290, available: true, sizes: [], optionGroups: [],
+      additionals: [{ name: 'Bacon', priceCents: 400 }] },
+    { id: 'off', name: 'Off', categoryId: 'bg', priceCents: 100, available: false, additionals: [], sizes: [], optionGroups: [] },
+  ];
+
+  await check('cardápio: preço vem do cadastro, com adicionais e entrega', () => {
+    const r = priceCart([{ product_id: 'xt', quantity: 2, additionals: ['Bacon', 'Bacon'] }], sabores, 500);
+    assert.equal(r.items[0].unitCents, 3690);
+    assert.equal(r.subtotalCents, 7380);
+    assert.equal(r.totalCents, 7880);
+    assert.throws(() => priceCart([{ product_id: 'off', quantity: 1 }], sabores, 0), /indisponível/);
+    assert.throws(() => priceCart([{ product_id: 'xt', quantity: 1, additionals: ['Ouro'] }], sabores, 0), /Ouro/);
+    assert.throws(() => priceCart([{ product_id: 'xt', quantity: 0 }], sabores, 0), /Quantidade/);
+    assert.throws(() => priceCart([], sabores, 0), /vazio/);
+  });
+
+  await check('cardápio: pizza meio a meio cobra o sabor mais caro e borda soma', () => {
+    const r = priceCart([{ product_id: 'cal', quantity: 1, size: 'Grande', flavors: ['qua'], options: [{ group: 'Borda', item: 'Catupiry' }] }], sabores, 0, { pz: 2 });
+    assert.equal(r.items[0].unitCents, 5800 + 800);
+    assert.equal(r.items[0].name, '½ Calabresa + ½ Quatro Queijos (Grande)');
+    assert.throws(() => priceCart([{ product_id: 'cal', quantity: 1 }], sabores, 0, { pz: 2 }), /tamanho/);
+    assert.throws(() => priceCart([{ product_id: 'cal', quantity: 1, size: 'Média', flavors: ['qua'] }], sabores, 0, {}), /máximo 1/);
+    assert.throws(() => priceCart([{ product_id: 'cal', quantity: 1, size: 'Média', flavors: ['xt'] }], sabores, 0, { pz: 3 }), /mesma categoria|tamanho/);
+    const duas = [{ group: 'Borda', item: 'Catupiry' }, { group: 'Borda', item: 'Cheddar' }];
+    assert.throws(() => priceCart([{ product_id: 'cal', quantity: 1, size: 'Média', options: duas }], sabores, 0, { pz: 2 }), /máximo 1/);
+  });
+
+  const ana = await db.user.findFirstOrThrow({ where: { email: 'ana@teste.com' }, include: { company: true } });
+  const slug = ana.company.slug;
+  const pub = client(base); // cliente do cardápio, sem login
+  const pzCat = await api('POST', '/api/categories', { name: 'Pizzas', maxFlavors: 2 });
+  const pizzaCal = await api('POST', '/api/products', {
+    name: 'Calabresa', priceCents: 4000, categoryId: pzCat.data.id, menuVisible: true, oldPriceCents: 4500,
+    menuOptions: { sizes: [{ name: 'Média', priceCents: 4000 }, { name: 'Grande', priceCents: 5000 }],
+      additionals: [{ name: 'Bacon', priceCents: 500 }] },
+  });
+  const novoPedido = (extra: any = {}) => pub('POST', `/api/public/stores/${slug}/orders`, {
+    customer_name: 'Carla', customer_phone: '11999990000', delivery_type: 'delivery', address: 'Rua A, 10',
+    payment_method: 'whatsapp', items: [{ product_id: pizzaCal.data.id, quantity: 2, size: 'Grande', additionals: ['Bacon'], price: 1 }],
+    ...extra,
+  });
+
+  await check('cardápio desligado não aparece; ligado mostra só produto marcado para o cardápio', async () => {
+    assert.equal((await pub('GET', `/api/public/stores/${slug}`)).status, 404);
+    await db.company.update({ where: { id: ana.companyId }, data: { whatsapp: '(11) 98888-7777' } });
+    const cfg = await api('PATCH', '/api/menu/settings', { enabled: true, deliveryFeeCents: 700, primaryColor: '#112233' });
+    assert.equal(cfg.status, 200);
+    const menu = await pub('GET', `/api/public/stores/${slug}`);
+    assert.equal(menu.status, 200);
+    assert.equal(menu.data.store.delivery_fee, 7);
+    assert.equal(menu.data.store.primary_color, '#112233');
+    assert.equal(menu.data.store.whatsapp, '5511988887777');
+    assert.deepEqual(menu.data.products.map((p: any) => p.name), ['Calabresa']); // o refrigerante do PDV não entra
+    assert.deepEqual(menu.data.products[0].sizes, [{ name: 'Média', price: 40 }, { name: 'Grande', price: 50 }]);
+    assert.equal(menu.data.products[0].old_price, 45);
+    assert.equal(menu.data.categories.find((c: any) => c.name === 'Pizzas').max_flavors, 2);
+  });
+
+  await check('salvar o produto pela tela do ERP não apaga os dados do cardápio', async () => {
+    await api('PATCH', `/api/products/${pizzaCal.data.id}`, { name: 'Calabresa', priceCents: 4000, categoryId: pzCat.data.id });
+    const p = await db.product.findUniqueOrThrow({ where: { id: pizzaCal.data.id } });
+    assert.equal(p.menuVisible, true);
+    assert.equal(JSON.parse(p.menuOptions).sizes.length, 2);
+  });
+
+  let pedidoId = '';
+  await check('pedido do cardápio: preço calculado no servidor, número sequencial e link do WhatsApp', async () => {
+    const r = await novoPedido();
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.number, 1);
+    assert.equal(r.data.items[0].unit_price, 55); // Grande 50 + Bacon 5, ignora o "price" do cliente
+    assert.equal(r.data.total, 117); // 2 × 55 + entrega 7
+    assert.match(r.data.whatsapp_url, /^https:\/\/wa\.me\/5511988887777\?text=/);
+    pedidoId = r.data.id;
+    assert.equal((await novoPedido({ customer_name: 'Davi' })).data.number, 2);
+  });
+
+  await check('pedido recusa produto fora do cardápio, loja fechada e Pix sem gateway', async () => {
+    const r = await pub('POST', `/api/public/stores/${slug}/orders`, {
+      customer_name: 'Carla', customer_phone: '11999990000', delivery_type: 'pickup', payment_method: 'whatsapp',
+      items: [{ product_id: productId, quantity: 1 }],
+    });
+    assert.equal(r.status, 400);
+    assert.match(r.data.message, /indisponível/);
+    assert.equal((await novoPedido({ payment_method: 'pix' })).status, 400);
+    await api('PATCH', '/api/menu/settings', { isOpen: false });
+    assert.match((await novoPedido()).data.message, /fechada/);
+    await api('PATCH', '/api/menu/settings', { isOpen: true });
+  });
+
+  await check('backoffice: loja vê e avança o próprio pedido; outra empresa não', async () => {
+    const lista = await api('GET', '/api/menu/orders');
+    assert.equal(lista.data.total, 2);
+    assert.equal((await outra('GET', '/api/menu/orders')).data.total, 0);
+    assert.equal((await outra('PATCH', `/api/menu/orders/${pedidoId}/status`, { status: 'preparing' })).status, 404);
+    const ok = await api('PATCH', `/api/menu/orders/${pedidoId}/status`, { status: 'preparing' });
+    assert.equal(ok.data.status, 'preparing');
+    const meus = await pub('GET', `/api/public/orders?ids=${pedidoId},nao-existe`);
+    assert.equal(meus.data.length, 1);
+    assert.equal(meus.data[0].status, 'preparing');
+  });
+
+  await check('pedido Pix: QR do gateway, fica fora da cozinha até pagar e confirma sozinho', async () => {
+    await db.company.update({ where: { id: ana.companyId }, data: { pixEnabled: true, pixSecretKey: 'sk_teste' } });
+    await api('PATCH', '/api/menu/settings', { pixEnabled: true });
+    pixMock.paid = false;
+    const r = await novoPedido({ payment_method: 'pix', customer_email: 'carla@teste.com' });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.payment_status, 'pending');
+    assert.equal(r.data.pix.qr_code, '00020126580014br.gov.bcb.pix0136teste');
+    assert.ok(!r.data.pix.qr_code_base64.startsWith('data:'));
+    assert.equal((await api('GET', '/api/menu/orders')).data.total, 2);
+    pixMock.paid = true;
+    const pago = await pub('GET', `/api/public/orders?ids=${r.data.id}`);
+    assert.equal(pago.data[0].payment_status, 'approved');
+    assert.equal(pago.data[0].pix, null);
+    assert.equal((await api('GET', '/api/menu/orders')).data.total, 3);
+    pixMock.paid = false;
+  });
+
+  await check('foto do cardápio: aceita imagem pelo conteúdo, recusa outro arquivo e fica pública', async () => {
+    const login = await fetch(`${base}/api/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'lojaflow' },
+      body: JSON.stringify({ email: 'ana@teste.com', password: 'senha1234' }),
+    });
+    const cookie = login.headers.get('set-cookie')!.split(';')[0];
+    const envia = (bytes: Buffer, name: string) => {
+      const form = new FormData();
+      form.append('file', new Blob([bytes]), name);
+      return fetch(`${base}/api/menu/images`, { method: 'POST', body: form, headers: { cookie, 'X-Requested-With': 'lojaflow' } });
+    };
+    const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a5d90000000049454e44ae426082', 'hex');
+    const ok = await envia(png, 'foto.jpg');
+    assert.equal(ok.status, 201);
+    const { url } = await ok.json();
+    assert.match(url, /^\/uploads\/menu\/[\w]+\/[0-9a-f]{24}\.png$/);
+    const servida = await fetch(base + url);
+    assert.equal(servida.status, 200);
+    assert.equal((await envia(Buffer.from('<script>alert(1)</script>'), 'x.png')).status, 400);
+    assert.equal((await fetch(`${base}/uploads/menu/nao-existe.png`)).status, 404);
+  });
+
+  // ---------- pedido entregue vira venda ----------
+  const formasCard = (await api('GET', '/api/company/payment-methods')).data.rows;
+  const fDinheiro = formasCard.find((m: any) => m.type === 'dinheiro');
+  const fCrediario = formasCard.find((m: any) => m.type === 'crediario');
+  if ((await api('GET', '/api/cash/current')).data?.session?.status !== 'open') {
+    await api('POST', '/api/cash/open', { registerId, openingCents: 0 });
+  }
+
+  await check('pedido entregue vira venda: preço do pedido, taxa de entrega, caixa e financeiro', async () => {
+    const entregar = (body: any) => api('PATCH', `/api/menu/orders/${pedidoId}/status`, { status: 'delivered', ...body });
+    assert.match((await entregar({})).data.message, /como o cliente pagou/);
+    assert.match((await entregar({ paymentMethodId: fCrediario.id })).data.message, /Crediário/);
+    const r = await entregar({ paymentMethodId: fDinheiro.id, receivedCents: 12000 });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.ok(r.data.saleId);
+    const venda = (await api('GET', `/api/sales/${r.data.saleId}`)).data;
+    const sale = venda.sale ?? venda;
+    assert.equal(sale.totalCents, 11700);
+    assert.equal(sale.changeCents ?? 300, 300);
+    const linhas = sale.items.map((i: any) => [i.name, i.quantity, i.unitPriceCents, i.priceSource]);
+    assert.deepEqual(linhas, [['Calabresa (Grande) + Bacon', 2, 5500, 'CARDAPIO'], ['Taxa de entrega', 1, 700, 'CARDAPIO']]);
+    assert.match(sale.notes, /Pedido #1 do cardápio/);
+    // pizza não tem estoque: a venda passa e o saldo fica negativo; a taxa não mexe em estoque
+    const est = await db.stock.findMany({ where: { productId: { in: sale.items.map((i: any) => i.productId) } } });
+    assert.deepEqual(est.map((e) => e.quantity), [-2]);
+    const fin = await db.financeEntry.findMany({ where: { saleId: sale.id } });
+    assert.deepEqual(fin.map((f) => [f.amountCents, f.status]), [[11700, 'paid']]);
+    const mov = await db.cashMovement.findMany({ where: { refId: sale.id } });
+    assert.equal(mov.length, 1);
+  });
+
+  await check('nome do item do cardápio não entra por venda comum do PDV', async () => {
+    const { priceCents } = await db.product.findUniqueOrThrow({ where: { id: productId } });
+    const r = await api('POST', '/api/sales', {
+      items: [{ productId, quantity: 1, menuName: 'Nome inventado' }],
+      payments: [{ paymentMethodId: fDinheiro.id, amountCents: priceCents }],
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.items[0].name, 'Refrigerante 2L');
+  });
+
+  await check('pedido já lançado não muda de status nem vira segunda venda', async () => {
+    const r = await api('PATCH', `/api/menu/orders/${pedidoId}/status`, { status: 'delivered', paymentMethodId: fDinheiro.id });
+    assert.equal(r.status, 400);
+    assert.equal((await api('PATCH', `/api/menu/orders/${pedidoId}/status`, { status: 'cancelled' })).status, 400);
+    assert.equal(await db.sale.count({ where: { idempotencyKey: `menu:${pedidoId}` } }), 1);
+  });
+
+  await check('pedido Pix pago entregue: venda recebida no PIX; Pix pendente só pode ser cancelado', async () => {
+    const pago = await db.menuOrder.findFirstOrThrow({ where: { companyId: ana.companyId, paymentStatus: 'approved' } });
+    const r = await api('PATCH', `/api/menu/orders/${pago.id}/status`, { status: 'delivered' });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    const sale = await db.sale.findUniqueOrThrow({ where: { id: r.data.saleId }, include: { payments: true } });
+    assert.equal(sale.paidInApp, true);
+    assert.equal(sale.appPaymentRef, 'tx_teste');
+    assert.deepEqual(sale.payments.map((p) => [p.methodType, p.amountCents]), [['pix', 11700]]);
+
+    pixMock.paid = false;
+    const pendente = await novoPedido({ payment_method: 'pix' });
+    assert.equal((await api('PATCH', `/api/menu/orders/${pendente.data.id}/status`, { status: 'preparing' })).status, 400);
+    assert.equal((await api('PATCH', `/api/menu/orders/${pendente.data.id}/status`, { status: 'cancelled' })).status, 200);
+  });
+
+  await check('tempo real: pedido novo chega na tela da loja na hora, e só na dela', async () => {
+    const sessao = async (email: string) => (await fetch(`${base}/api/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'lojaflow' },
+      body: JSON.stringify({ email, password: 'senha1234' }),
+    })).headers.get('set-cookie')!.split(';')[0];
+    /** abre o SSE e junta o que chegar até `ms` */
+    const ouvir = async (cookie: string, ms: number) => {
+      const ctrl = new AbortController();
+      const res = await fetch(`${base}/api/menu/events`, { headers: { cookie }, signal: ctrl.signal });
+      assert.equal(res.headers.get('content-type')?.split(';')[0], 'text/event-stream');
+      let texto = '';
+      const leitura = (async () => {
+        const r = res.body!.getReader();
+        try { for (;;) { const { value, done } = await r.read(); if (done) break; texto += Buffer.from(value).toString(); } } catch { /* abortado */ }
+      })();
+      return { fim: async () => { await new Promise((ok) => setTimeout(ok, ms)); ctrl.abort(); await leitura; return texto; } };
+    };
+    const loja = await ouvir(await sessao('ana@teste.com'), 500);
+    const concorrente = await ouvir(await sessao('beto@teste.com'), 500);
+    const r = await novoPedido({ customer_name: 'Gabi Ao Vivo' });
+    const recebido = await loja.fim();
+    const evento = JSON.parse(recebido.split('\n').find((l) => l.startsWith('data: {'))!.slice(6));
+    assert.deepEqual([evento.type, evento.id, evento.number, evento.customerName], ['new', r.data.id, r.data.number, 'Gabi Ao Vivo']);
+    assert.equal(evento.companyId, undefined);
+    assert.ok(!(await concorrente.fim()).includes('Gabi'));
+    // sem login não abre o canal
+    assert.equal((await fetch(`${base}/api/menu/events`)).status, 401);
   });
 
   await app.close();

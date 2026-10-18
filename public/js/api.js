@@ -80,3 +80,33 @@ export const patch = (path, body) => api(path, { method: 'PATCH', body });
 export const put = (path, body) => api(path, { method: 'PUT', body });
 export const del = (path) => api(path, { method: 'DELETE' });
 export const getText = (path, query) => api(path, { query, raw: true });
+
+/** foto de celular passa fácil dos 3 MB: reduz para 1600px em WEBP (mantém transparência do logo) */
+async function shrink(file) {
+  try {
+    const img = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+    if (scale === 1 && file.size <= 1024 * 1024) return file;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((ok) => canvas.toBlob(ok, 'image/webp', 0.85));
+    return blob && blob.size < file.size ? blob : file;
+  } catch {
+    return file; // formato que o navegador não abre (ex.: HEIC): o servidor responde com a mensagem certa
+  }
+}
+
+/** Foto do cardápio (multipart vai direto no fetch: o cliente acima só manda JSON). Devolve a URL pública. */
+export async function uploadImage(file) {
+  const form = new FormData();
+  form.append('file', await shrink(file), 'imagem');
+  const res = await fetch('/api/menu/images', {
+    method: 'POST', body: form, credentials: 'same-origin', headers: { 'X-Requested-With': 'lojaflow' },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 413) throw new ApiError('Imagem muito grande. Envie uma de até 3 MB.', 413);
+  if (!res.ok) throw new ApiError(data.message || 'Falha ao enviar a imagem.', res.status);
+  return data.url;
+}

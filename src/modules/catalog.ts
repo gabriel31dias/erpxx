@@ -2,7 +2,11 @@ import {
   BadRequestException, Body, Controller, Delete, Get, Inject, Module, NotFoundException,
   Param, Patch, Post, Query, Req,
 } from '@nestjs/common';
-import { IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import {
+  ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min,
+  MinLength, ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 import type { Request } from 'express';
 import { PRISMA, Db } from '../common/prisma.service';
 import { CurrentUser, Perms, SessionUser } from '../common/auth.guard';
@@ -12,6 +16,25 @@ import { PricingModule, PricingService } from './pricing';
 
 export const UNITS = ['UN', 'KG', 'G', 'L', 'ML', 'CX', 'PCT'];
 export const SALE_TYPES = ['UNIT', 'WEIGHT'];
+
+class MenuItemDto {
+  @IsString() @MinLength(1) @MaxLength(60) name!: string;
+  @IsInt() @Min(0) priceCents!: number;
+}
+
+class MenuOptionGroupDto {
+  @IsString() @MinLength(1) @MaxLength(40) name!: string;
+  @IsInt() @Min(0) @Max(20) min!: number;
+  @IsInt() @Min(1) @Max(20) max!: number;
+  @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => MenuItemDto) items!: MenuItemDto[];
+}
+
+/** Adicionais, tamanhos (pizza) e grupos de escolha do cardápio. */
+class MenuOptionsDto {
+  @IsOptional() @IsArray() @ArrayMaxSize(30) @ValidateNested({ each: true }) @Type(() => MenuItemDto) additionals?: MenuItemDto[];
+  @IsOptional() @IsArray() @ArrayMaxSize(10) @ValidateNested({ each: true }) @Type(() => MenuItemDto) sizes?: MenuItemDto[];
+  @IsOptional() @IsArray() @ArrayMaxSize(10) @ValidateNested({ each: true }) @Type(() => MenuOptionGroupDto) optionGroups?: MenuOptionGroupDto[];
+}
 
 class ProductDto {
   @IsString() @MinLength(2) name!: string;
@@ -45,6 +68,11 @@ class ProductDto {
   @IsOptional() @IsInt() @Min(0) cofinsAliqBp?: number;
   @IsOptional() @IsNumber() @Min(0) netWeight?: number;
   @IsOptional() @IsNumber() @Min(0) grossWeight?: number;
+  // ---- Cardápio digital (omitido mantém o que está gravado) ----
+  @IsOptional() @IsBoolean() menuVisible?: boolean;
+  @IsOptional() @IsInt() @Min(0) oldPriceCents?: number | null;
+  @IsOptional() @ValidateNested() @Type(() => MenuOptionsDto) menuOptions?: MenuOptionsDto;
+  @IsOptional() @IsInt() position?: number;
 }
 
 /** Mantém só dígitos (NCM/CEST/CFOP vêm com pontos às vezes). */
@@ -54,6 +82,8 @@ class CategoryDto {
   @IsString() @MinLength(2) name!: string;
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsBoolean() active?: boolean;
+  @IsOptional() @IsInt() @Min(1) @Max(4) maxFlavors?: number;
+  @IsOptional() @IsInt() position?: number;
 }
 
 @Controller('api/products')
@@ -277,6 +307,15 @@ export class ProductsController {
       maxStock: dto.maxStock ?? 0,
       imageUrl: dto.imageUrl || null,
       active: dto.active ?? true,
+      // cardápio: undefined não mexe (a tela de produto do ERP não manda esses campos)
+      menuVisible: dto.menuVisible,
+      oldPriceCents: dto.oldPriceCents,
+      menuOptions: dto.menuOptions && JSON.stringify({
+        additionals: dto.menuOptions.additionals ?? [],
+        sizes: dto.menuOptions.sizes ?? [],
+        optionGroups: dto.menuOptions.optionGroups ?? [],
+      }),
+      position: dto.position,
       // fiscais
       ncm: soDigitos(dto.ncm),
       cest: soDigitos(dto.cest),
@@ -334,6 +373,7 @@ export class CategoriesController {
       data: {
         companyId: u.companyId, name: dto.name.trim(),
         description: dto.description || null, active: dto.active ?? true,
+        maxFlavors: dto.maxFlavors, position: dto.position,
       },
     });
     await this.audit.log(u, 'create', 'Category', category.id, { nome: category.name }, req.ip);
@@ -346,7 +386,10 @@ export class CategoriesController {
     if (!before) throw new NotFoundException('Categoria não encontrada.');
     const category = await this.db.category.update({
       where: { id },
-      data: { name: dto.name.trim(), description: dto.description || null, active: dto.active ?? before.active },
+      data: {
+        name: dto.name.trim(), description: dto.description || null, active: dto.active ?? before.active,
+        maxFlavors: dto.maxFlavors, position: dto.position,
+      },
     });
     await this.audit.log(u, 'update', 'Category', id, AuditService.diff(before, category), req.ip);
     return category;

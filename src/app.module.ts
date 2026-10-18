@@ -31,6 +31,7 @@ import { CreditModule } from './modules/credit';
 import { FieldModule } from './modules/field';
 import { PlatformModule } from './modules/platform';
 import { TerminalsModule } from './modules/terminals';
+import { MENU_IMAGES_DIR, MenuModule } from './modules/menu';
 
 // O tema Riho fica na pasta do starter kit; se copiado para dentro do projeto, usa a cópia local.
 const localAssets = join(__dirname, '..', 'public', 'assets');
@@ -46,10 +47,12 @@ const themeAssets = existsSync(localAssets) ? localAssets : join(__dirname, '..'
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: Number(process.env.THROTTLE_LIMIT) || 600 }]),
     ServeStaticModule.forRoot(
       { rootPath: themeAssets, serveRoot: '/assets' },
+      // fotos do cardápio (públicas); comprovantes ficam em data/uploads e não são servidos
+      { rootPath: MENU_IMAGES_DIR, serveRoot: '/uploads/menu', serveStaticOptions: { fallthrough: false, index: false } },
       { rootPath: join(__dirname, '..', 'public'), exclude: ['/api/{*path}'] },
     ),
     AuthModule, CatalogModule, CrmModule, StockModule, SalesModule, CashModule,
-    FinanceModule, ReportsModule, CompanyModule, UsersModule, BillingModule, ImportsModule, PaymentsModule, FiscalModule, MiscModule, SellersModule, AttachmentsModule, PricingModule, CreditModule, FieldModule, PlatformModule, TerminalsModule,
+    FinanceModule, ReportsModule, CompanyModule, UsersModule, BillingModule, ImportsModule, PaymentsModule, FiscalModule, MiscModule, SellersModule, AttachmentsModule, PricingModule, CreditModule, FieldModule, PlatformModule, TerminalsModule, MenuModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

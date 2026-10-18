@@ -10,6 +10,10 @@ export default async function render({ content, can }) {
   function formulario(row = {}) {
     const nome = input({ value: row.name ?? '', required: true });
     const descricao = input({ value: row.description ?? '' });
+    const sabores = select([1, 2, 3, 4].map((n) => ({
+      value: String(n), label: n === 1 ? 'Não (1 sabor)' : `Até ${n} sabores`, selected: (row.maxFlavors ?? 1) === n,
+    })));
+    const ordem = input({ type: 'number', value: row.position ?? 0 });
     const ativo = select([
       { value: 'true', label: 'Ativa', selected: row.active !== false },
       { value: 'false', label: 'Inativa', selected: row.active === false },
@@ -20,7 +24,9 @@ export default async function render({ content, can }) {
       body: h('div', { class: 'row g-3' },
         field('Nome', nome, { col: 'col-12' }),
         field('Descrição', descricao, { col: 'col-12' }),
-        field('Situação', ativo, { col: 'col-12' })),
+        field('Situação', ativo, { col: 'col-12' }),
+        field('Meio a meio no cardápio', sabores, { col: 'col-6' }),
+        field('Ordem no cardápio', ordem, { col: 'col-6' })),
       footer: [h('button', { class: 'btn btn-light', 'data-bs-dismiss': 'modal' }, 'Cancelar'), salvar],
     });
     salvar.onclick = async () => {
@@ -28,6 +34,7 @@ export default async function render({ content, can }) {
         const body = {
           name: nome.value.trim(), description: descricao.value.trim() || undefined,
           active: ativo.value === 'true',
+          maxFlavors: Number(sabores.value), position: Number(ordem.value) || 0,
         };
         row.id ? await patch(`/categories/${row.id}`, body) : await post('/categories', body);
         m.close();

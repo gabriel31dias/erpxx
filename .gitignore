@@ -5,4 +5,5 @@ data/*.db*
 .playwright-mcp
 certs
 data/uploads
+data/menu-images
 data/sqlite-*

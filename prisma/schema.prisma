@@ -125,6 +125,9 @@ model Company {
   cscId          String? // ID do token CSC (NFC-e)
   csc            String? // CSC/token — nunca devolvido ao cliente
 
+  // Cardápio digital (JSON: aparência, horário, entrega, aberto/fechado). Ver DEFAULT_MENU em modules/menu.ts
+  menuSettings String @default("{}")
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
@@ -168,6 +171,7 @@ model Company {
   notifications  Notification[]
   auditLogs      AuditLog[]
   idempotency    IdempotencyKey[]
+  menuOrders     MenuOrder[]
 
   @@index([status, createdAt])
 }
@@ -297,6 +301,9 @@ model Category {
   name        String
   description String?
   active      Boolean @default(true)
+  // cardápio: 1 = sem meio a meio; 2..4 = cliente divide a pizza em até N sabores desta categoria
+  maxFlavors  Int     @default(1)
+  position    Int     @default(0)
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -326,6 +333,14 @@ model Product {
   maxStock     Float   @default(0)
   imageUrl     String?
   active       Boolean @default(true)
+
+  // ---- Cardápio digital ----
+  menuVisible   Boolean @default(false) // aparece no cardápio público
+  oldPriceCents Int? // "de R$ X por" (promoção)
+  // JSON: { additionals: [{name, priceCents}], sizes: [{name, priceCents}],
+  //         optionGroups: [{name, min, max, items: [{name, priceCents}]}] }
+  menuOptions   String  @default("{}")
+  position      Int     @default(0)
 
   // ---- Dados fiscais (NF-e) ----
   ncm          String? // 8 dígitos — obrigatório para emitir
@@ -787,7 +802,7 @@ model SaleItem {
   quantity      Float
   unitPriceCents Int
   basePriceCents Int?   // preço do cadastro no momento da venda
-  priceSource   String  @default("BASE") // BASE | TABELA | MANUAL | OFFLINE (preço do aparelho, tabela mudou depois)
+  priceSource   String  @default("BASE") // BASE | TABELA | MANUAL | OFFLINE (preço do aparelho, tabela mudou depois) | CARDAPIO (pedido do cardápio)
   unitCostCents Int     @default(0)
   discountCents Int     @default(0)
   totalCents    Int
@@ -838,6 +853,40 @@ model SalePayment {
 
   @@index([saleId])
   @@index([companyId])
+}
+
+// ---------- Cardápio digital ----------
+/// Pedido do cardápio. Não é venda: tem ciclo de cozinha/entrega e só vira Sale depois.
+model MenuOrder {
+  // uuid: é o "token" que o cliente usa para acompanhar o pedido sem login
+  id               String  @id @default(uuid())
+  companyId        String
+  number           Int
+  customerName     String
+  customerPhone    String
+  deliveryType     String // delivery | pickup
+  address          String  @default("")
+  notes            String  @default("")
+  // JSON: [{ productId, name, quantity, unitCents, additionals: [{name, priceCents}], totalCents }]
+  items            String
+  subtotalCents    Int
+  deliveryFeeCents Int
+  totalCents       Int
+  paymentMethod    String // whatsapp | pix
+  paymentStatus    String  @default("none") // none | pending | approved | rejected
+  pixChargeId      String?
+  pixQrCode        String?
+  pixQrImage       String? // base64 do PNG, sem o prefixo data:
+  status           String  @default("pending") // pending | preparing | delivering | delivered | cancelled
+  saleId           String? // venda gerada quando o pedido é entregue
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, number])
+  @@index([companyId, status, createdAt])
 }
 
 // ---------- Caixa ----------

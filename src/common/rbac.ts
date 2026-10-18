@@ -27,6 +27,9 @@ export const PERMISSIONS = [
 
   'caixa.visualizar', 'caixa.abrir', 'caixa.fechar', 'caixa.sangria', 'caixa.suprimento',
 
+  'pedido.visualizar', 'pedido.gerenciar', // pedidos do cardápio digital
+  'cardapio.gerenciar', // aparência, horário e entrega do cardápio
+
   'financeiro.visualizar', 'financeiro.gerenciar',
 
   'relatorio.visualizar', 'relatorio.exportar',
@@ -40,6 +43,7 @@ const CAIXA: Permission[] = [
   'cliente.visualizar', 'cliente.gerenciar',
   'pdv.acessar', 'pdv.cancelar_item', 'venda.visualizar',
   'caixa.visualizar', 'caixa.abrir', 'caixa.fechar',
+  'pedido.visualizar', 'pedido.gerenciar',
 ];
 
 const ESTOQUISTA: Permission[] = [
