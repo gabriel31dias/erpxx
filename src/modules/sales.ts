@@ -33,6 +33,8 @@ const ON_TERMINAL = ['pix', 'debito', 'credito'];
 export const MENU_ROLE = 'cardapio';
 /** Produto interno que leva a taxa de entrega do pedido para a venda (não mexe em estoque). */
 export const MENU_FEE_SKU = 'CARDAPIO-ENTREGA';
+/** Produto interno da taxa de serviço da mesa (garçom); também não mexe em estoque. */
+export const MENU_SERVICE_SKU = 'MESA-SERVICO';
 
 export class SaleItemDto {
   @IsString() productId!: string;
@@ -435,7 +437,7 @@ export class SalesService {
         unitCostCents: product.costCents,
         discountCents: discount, totalCents: itemTotalCents(unitPrice, quantity, discount),
         gross: Math.round(unitPrice * quantity),
-        noStock: a.role === MENU_ROLE && product.sku === MENU_FEE_SKU,
+        noStock: a.role === MENU_ROLE && (product.sku === MENU_FEE_SKU || product.sku === MENU_SERVICE_SKU),
       });
     }
 

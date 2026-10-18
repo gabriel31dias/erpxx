@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { fetchMenu, createOrder, fetchOrders } from '../lib/api';
+import { fetchMenu, createOrder, fetchOrders, waiterApi } from '../lib/api';
+import { useTables } from '../garcom/useTables';
 
 const AppContext = createContext();
 
@@ -65,6 +66,16 @@ export function priceLine({ product, size = null, flavors = [], additionals = []
   return { unit: Math.max(...prices) + extras, name: size ? `${flavorName} (${size})` : flavorName };
 }
 
+/** linha do carrinho → formato da API (o servidor recalcula o preço) */
+const toApiLine = (i) => ({
+  product_id: i.product.id,
+  quantity: i.quantity,
+  additionals: (i.selectedAdditionals || []).map((a) => a.name),
+  size: i.size || undefined,
+  flavors: i.flavors?.length ? i.flavors.map((f) => f.id) : undefined,
+  options: i.options?.length ? i.options.map((o) => ({ group: o.group, item: o.name })) : undefined,
+});
+
 const STATUS = {
   pending: { label: 'Recebido', code: 'preparing' },
   preparing: { label: 'Em preparação', code: 'preparing' },
@@ -88,13 +99,15 @@ const toAppOrder = (o) => {
   };
 };
 
-export function AppProvider({ children }) {
+/** waiter: usuário do ERP logado (/api/auth/me) = app do garçom; vazio = app do cliente */
+export function AppProvider({ children, waiter = null }) {
   // dados da loja
   const [menu, setMenu] = useState({ loading: true, error: null, store: null, categories: [], products: [] });
 
-  const [currentScreen, setCurrentScreen] = useState('home');
-  const [history, setHistory] = useState(['home']);
-  const [activeTab, setActiveTab] = useState('home');
+  const start = waiter ? 'mesas' : 'home';
+  const [currentScreen, setCurrentScreen] = useState(start);
+  const [history, setHistory] = useState([start]);
+  const [activeTab, setActiveTab] = useState(waiter ? 'mesas' : 'home');
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [selectedCategory, setSelectedCategory] = useState('todos');
   const [categoryFilter, setCategoryFilter] = useState('todos');
@@ -121,7 +134,7 @@ export function AppProvider({ children }) {
 
   useEffect(() => {
     if (!SLUG) return setMenu((m) => ({ ...m, loading: false, error: 'Cardápio não encontrado' }));
-    fetchMenu(SLUG)
+    (waiter ? waiterApi.catalog() : fetchMenu(SLUG))
       .then((d) => {
         const products = d.products.map(toAppProduct);
         setMenu({ loading: false, error: null, store: d.store, categories: d.categories, products });
@@ -144,7 +157,7 @@ export function AppProvider({ children }) {
         );
         if (!d.store.accepts_delivery) setDeliveryType('pickup');
         setSelectedPayment(d.store.whatsapp_enabled ? 'whatsapp' : 'pix');
-        document.title = d.store.name;
+        document.title = waiter ? `Garçom · ${d.store.name}` : d.store.name;
       })
       .catch((e) => setMenu((m) => ({ ...m, loading: false, error: e.message })));
   }, []);
@@ -158,11 +171,14 @@ export function AppProvider({ children }) {
   };
 
   const navigateTo = (screenKey, addToHistory = true) => {
+    // garçom não tem a home da loja: o cardápio é a lista de produtos
+    if (waiter && screenKey === 'home') screenKey = 'categoria';
     if (addToHistory && currentScreen !== screenKey) setHistory((prev) => [...prev, screenKey]);
     setCurrentScreen(screenKey);
     if (['home', 'categoria'].includes(screenKey)) setActiveTab('home');
     else if (['meus_pedidos', 'rastreamento'].includes(screenKey)) setActiveTab('pedidos');
     else if (['perfil', 'favoritos', 'configuracoes', 'suporte', 'sobre'].includes(screenKey)) setActiveTab('perfil');
+    else if (['mesas', 'comanda'].includes(screenKey)) setActiveTab(screenKey);
     window.scrollTo(0, 0);
   };
 
@@ -229,7 +245,7 @@ export function AppProvider({ children }) {
 
   const storeInfo = menu.store;
   const subtotal = cart.reduce((sum, item) => sum + item.itemTotal, 0);
-  const currentDeliveryFee = deliveryType === 'pickup' || !storeInfo ? 0 : storeInfo.delivery_fee;
+  const currentDeliveryFee = waiter || deliveryType === 'pickup' || !storeInfo ? 0 : storeInfo.delivery_fee; // mesa não paga entrega
   const total = subtotal + currentDeliveryFee;
 
   const toggleFavorite = (productId) =>
@@ -250,14 +266,7 @@ export function AppProvider({ children }) {
         address: deliveryType === 'delivery' ? customer.address : undefined,
         notes: customer.notes || undefined,
         payment_method: selectedPayment,
-        items: cart.map((i) => ({
-          product_id: i.product.id,
-          quantity: i.quantity,
-          additionals: (i.selectedAdditionals || []).map((a) => a.name),
-          size: i.size || undefined,
-          flavors: i.flavors?.length ? i.flavors.map((f) => f.id) : undefined,
-          options: i.options?.length ? i.options.map((o) => ({ group: o.group, item: o.name })) : undefined,
-        })),
+        items: cart.map(toApiLine),
       });
       const appOrder = toAppOrder(order);
       setOrderIds((ids) => [order.id, ...ids.filter((id) => id !== order.id)].slice(0, 30));
@@ -280,9 +289,15 @@ export function AppProvider({ children }) {
     }
   };
 
+  const mesas = useTables(waiter, { cart, clearCart, toApiLine });
+  const notify = (text) => setToast({ id: Date.now(), text });
+
   return (
     <AppContext.Provider
       value={{
+        ...mesas,
+        waiter,
+        notify,
         slug: SLUG,
         menu,
         storeInfo,

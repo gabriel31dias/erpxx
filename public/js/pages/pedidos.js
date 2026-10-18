@@ -1,9 +1,9 @@
 // Pedidos do cardápio digital: a cozinha/balcão avança o status; entregue vira venda.
 // Tempo real por SSE (/api/menu/events): pedido novo aparece na hora, com bip.
-import { get, patch } from '../api.js';
+import { get, patch, post } from '../api.js';
 import { branchId, pageTitle } from '../shell.js';
 import {
-  card, centsToInput, field, fmtBRL, h, modal, moneyInput, moneyToCents, mount, paginator, refreshIcons, select,
+  askReason, card, centsToInput, field, fmtBRL, h, modal, moneyInput, moneyToCents, mount, paginator, refreshIcons, select,
   statusBadge, toast,
 } from '../ui.js';
 
@@ -14,6 +14,14 @@ const STATUS = {
   delivered: { label: 'Entregue', kind: 'success' },
   cancelled: { label: 'Cancelado', kind: 'secondary' },
 };
+/** mesa: depois de pronto é servido, sem entrega; a venda sai ao fechar a conta */
+const MESA = {
+  ...STATUS,
+  preparing: { ...STATUS.preparing, next: 'delivered', action: 'Servido' },
+  delivered: { label: 'Servido', kind: 'success' },
+};
+const etapa = (o, status) => (o.table != null ? MESA : STATUS)[status];
+
 const FILTROS = [
   ['pending,preparing,delivering', 'Em andamento'],
   ['pending', 'Novos'],
@@ -58,7 +66,8 @@ export default async function render({ content, can }) {
 
   /** pedido por WhatsApp: pergunta como o cliente pagou na entrega */
   function entregar(o) {
-    if (o.paymentMethod === 'pix') return mudar(o, 'delivered');
+    // pix já pago; mesa paga ao fechar a conta no app do garçom
+    if (o.paymentMethod !== 'whatsapp') return mudar(o, 'delivered');
     const forma = select(formas.map((m, i) => ({ value: m.id, label: m.name, selected: i === 0 })));
     const recebido = moneyInput({ value: centsToInput(o.totalCents) });
     const campoRecebido = field('Valor recebido em dinheiro (para o troco)', recebido, { col: 'col-12' });
@@ -88,7 +97,7 @@ export default async function render({ content, can }) {
   async function mudar(o, status, extra = {}) {
     try {
       const r = await patch(`/menu/orders/${o.id}/status`, { status, branchId: branchId() || undefined, ...extra });
-      toast(r.saleId ? `Pedido #${o.number} entregue e lançado como venda.` : `Pedido #${o.number}: ${STATUS[status].label}.`);
+      toast(r.saleId ? `Pedido #${o.number} entregue e lançado como venda.` : `Pedido #${o.number}: ${etapa(o, status).label}.`);
       carregar();
       return true;
     } catch (e) {
@@ -97,20 +106,36 @@ export default async function render({ content, can }) {
     }
   }
 
+  async function cancelar(o) {
+    const reason = await askReason(`Cancelar pedido #${o.number}`, {
+      quick: ['Cliente desistiu', 'Pedido errado', 'Sem o produto', 'Demora'], okLabel: 'Cancelar pedido',
+    });
+    if (!reason) return;
+    try {
+      const r = await post(`/menu/orders/${o.id}/cancel`, { reason });
+      toast(r.refundPending
+        ? `Pedido #${o.number} cancelado. Ele foi pago por Pix: faça o estorno no gateway.`
+        : `Pedido #${o.number} cancelado.`, r.refundPending ? 'warning' : undefined);
+      carregar();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
   function pedido(o) {
-    const st = STATUS[o.status];
+    const st = etapa(o, o.status);
+    const mesa = o.table != null;
     const zap = o.customerPhone.replace(/\D/g, '');
     return h('div', { class: 'border rounded p-3 mb-3' },
       h('div', { class: 'd-flex flex-wrap justify-content-between gap-2 mb-2' },
         h('div', {},
           h('strong', { class: 'me-2' }, `#${o.number}`),
           statusBadge(st.label, st.kind), ' ',
-          o.paymentMethod === 'pix' ? statusBadge('Pix pago', 'success') : statusBadge('Paga na entrega', 'light'),
+          mesa ? statusBadge(`Mesa ${o.table}`, 'dark')
+            : o.paymentMethod === 'pix' ? statusBadge('Pix pago', 'success') : statusBadge('Paga na entrega', 'light'),
           h('div', { class: 'f-12 txt-secondary mt-1' }, new Date(o.createdAt).toLocaleString('pt-BR').slice(0, 17))),
         h('div', { class: 'text-end' },
           h('div', { class: 'f-w-600' }, fmtBRL(o.totalCents)),
           o.deliveryFeeCents ? h('div', { class: 'f-12 txt-secondary' }, `inclui entrega ${fmtBRL(o.deliveryFeeCents)}`) : null)),
-      h('div', { class: 'mb-2' },
+      mesa ? null : h('div', { class: 'mb-2' },
         h('span', { class: 'f-w-600' }, o.customerName), ' · ',
         h('a', { href: `https://wa.me/${zap.length <= 11 ? `55${zap}` : zap}`, target: '_blank', rel: 'noopener' }, o.customerPhone),
         h('div', { class: 'f-12' }, o.deliveryType === 'delivery' ? `Entrega: ${o.address}` : 'Retirar no local')),
@@ -118,13 +143,15 @@ export default async function render({ content, can }) {
         `${i.quantity}x ${i.name} — ${fmtBRL(i.totalCents)}`,
         i.additionals.length ? h('div', { class: 'f-12 txt-secondary' }, i.additionals.map((a) => `+ ${a.name}`).join(' · ')) : null))),
       o.notes ? h('div', { class: 'alert alert-light py-2 px-3 mb-2 f-12' }, `Obs: ${o.notes}`) : null,
+      o.cancelReason ? h('div', { class: 'alert alert-secondary py-2 px-3 mb-2 f-12' }, `Cancelado: ${o.cancelReason}`) : null,
+      o.paymentStatus === 'refund_pending' ? h('div', { class: 'alert alert-warning py-2 px-3 mb-2 f-12' }, 'Pago por Pix: estorno pendente no gateway.') : null,
       h('div', { class: 'd-flex flex-wrap gap-2 justify-content-end' },
         o.saleId ? h('a', { class: 'btn btn-sm btn-outline-secondary', href: `/venda.html?id=${o.saleId}` }, 'Ver venda') : null,
         gerencia && st.next && !o.saleId
           ? h('button', { class: 'btn btn-sm btn-primary', onclick: () => (st.next === 'delivered' ? entregar(o) : mudar(o, st.next)) }, st.action)
           : null,
         gerencia && !['delivered', 'cancelled'].includes(o.status)
-          ? h('button', { class: 'btn btn-sm btn-outline-danger', onclick: () => mudar(o, 'cancelled') }, 'Cancelar')
+          ? h('button', { class: 'btn btn-sm btn-outline-danger', onclick: () => cancelar(o) }, 'Cancelar')
           : null));
   }
 

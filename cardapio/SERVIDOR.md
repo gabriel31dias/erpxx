@@ -70,6 +70,19 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # app do garçom (/garcom): login, catálogo, mesas e o tempo real com a sessão do ERP.
+    # O cookie é SameSite=strict: o app precisa falar com a API pelo próprio domínio (este proxy).
+    location ~ ^/api/(auth|menu|company/payment-methods)(/|$) {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;          # /api/menu/events é SSE
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+    }
+
     location /uploads/menu/ {
         proxy_pass http://127.0.0.1:3000;
         expires 7d;
@@ -119,6 +132,12 @@ location /api/menu/events {
 > `ecosystem.config.js` sobe). Se um dia rodar em cluster, o canal precisa ir para Redis ou para
 > o LISTEN/NOTIFY do Postgres.
 
+### App do garçom
+
+Abre em `https://cardapio.minhaloja.com.br/garcom` (mesmo build, sem deploy separado). Entra com o
+usuário do ERP. Em produção o cookie de sessão é `secure`: precisa de HTTPS. Não funciona com
+`VITE_API_URL` apontando para outro domínio (o cookie `SameSite=strict` não vai entre sites).
+
 ## 4. Ligar na loja
 
 No ERP, logado como dono:
@@ -128,6 +147,9 @@ No ERP, logado como dono:
 2. **Produtos**: em cada produto, "Cardápio digital" → "Mostrar no cardápio".
 3. Confira se o **WhatsApp** da empresa está no cadastro (o pedido por WhatsApp usa esse número).
 4. Abra `https://cardapio.minhaloja.com.br/<slug>` (botão "Abrir cardápio").
+5. Mesas: em **Cardápio digital** informe quantas mesas tem o salão; em **Usuários** crie os garçons
+   com o perfil **Garçom**. Eles lançam pedidos e veem a comanda; fechar a conta é do caixa/gerente
+   (no mesmo app, botão "Fechar conta").
 
 Pedido entregue vira venda no **caixa aberto**. Sem caixa aberto a entrega é recusada.
 

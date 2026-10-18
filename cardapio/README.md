@@ -21,6 +21,16 @@ Outra porta do ERP: `VITE_API_PROXY_TARGET=http://localhost:3001 npm run dev`.
 3. Pedido aparece em **Pedidos do cardápio** no ERP; entregue, vira venda (caixa, estoque, financeiro).
    O cliente acompanha em "Pedidos" no app.
 
+## App do garçom (`/garcom`)
+
+Mesmo projeto, outra entrada: `src/garcom/`. Entra com o usuário do ERP (perfil **Garçom**, ou caixa/gerente),
+mostra as mesas ao vivo (SSE `/api/menu/events`), lança pedidos na mesa reaproveitando catálogo, detalhe e
+carrinho do cardápio, e mostra a comanda. "Fechar conta" junta os pedidos da mesa numa venda só
+(exige `pedido.gerenciar`), com taxa de serviço opcional (% em Cardápio digital) e conta dividida em
+vários pagamentos. Na comanda: transferir/juntar mesas e cancelar pedido ou item, sempre com motivo
+(garçom só cancela pedido "Novo"; depois que a cozinha aceita, só caixa/gerente).
+Em dev: `http://localhost:3333/garcom`.
+
 ## Produção
 
 - Passo a passo do servidor (nginx, `.env`, banco): [SERVIDOR.md](SERVIDOR.md).

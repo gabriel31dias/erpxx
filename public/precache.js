@@ -1,5 +1,5 @@
 // Gerado por tools/genpages.js — arquivos que ficam no aparelho.
-self.CACHE_VERSION = 'fbebc26e83';
+self.CACHE_VERSION = '94c275ae58';
 self.PRECACHE = [
   "/",
   "/aceitar-convite.html",
@@ -1131,6 +1131,7 @@ self.PRECACHE = [
   "/js/pages/importacao.js",
   "/js/pages/lancamento.js",
   "/js/pages/maquininhas.js",
+  "/js/pages/mesas.js",
   "/js/pages/notas.js",
   "/js/pages/notificacoes.js",
   "/js/pages/onboarding.js",
@@ -1157,6 +1158,7 @@ self.PRECACHE = [
   "/login.html",
   "/manifest.webmanifest",
   "/maquininhas.html",
+  "/mesas.html",
   "/notas.html",
   "/notificacoes.html",
   "/onboarding.html",

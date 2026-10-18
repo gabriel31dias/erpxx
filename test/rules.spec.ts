@@ -41,8 +41,7 @@ function check(name: string, fn: () => void | Promise<void>) {
 }
 
 /** Cliente HTTP mínimo que guarda o cookie de sessão. */
-function client(base: string) {
-  let cookie = '';
+function client(base: string, cookie = '') {
   const call = async (method: string, path: string, body?: any) => {
     const res = await fetch(base + path, {
       method,
@@ -1593,7 +1592,7 @@ async function main() {
   await check('pedido já lançado não muda de status nem vira segunda venda', async () => {
     const r = await api('PATCH', `/api/menu/orders/${pedidoId}/status`, { status: 'delivered', paymentMethodId: fDinheiro.id });
     assert.equal(r.status, 400);
-    assert.equal((await api('PATCH', `/api/menu/orders/${pedidoId}/status`, { status: 'cancelled' })).status, 400);
+    assert.equal((await api('POST', `/api/menu/orders/${pedidoId}/cancel`, { reason: 'teste' })).status, 400);
     assert.equal(await db.sale.count({ where: { idempotencyKey: `menu:${pedidoId}` } }), 1);
   });
 
@@ -1609,7 +1608,11 @@ async function main() {
     pixMock.paid = false;
     const pendente = await novoPedido({ payment_method: 'pix' });
     assert.equal((await api('PATCH', `/api/menu/orders/${pendente.data.id}/status`, { status: 'preparing' })).status, 400);
-    assert.equal((await api('PATCH', `/api/menu/orders/${pendente.data.id}/status`, { status: 'cancelled' })).status, 200);
+    // cancelar só pela rota própria, com motivo
+    assert.equal((await api('PATCH', `/api/menu/orders/${pendente.data.id}/status`, { status: 'cancelled' })).status, 400);
+    const cancelado = await api('POST', `/api/menu/orders/${pendente.data.id}/cancel`, { reason: 'Cliente desistiu' });
+    assert.equal(cancelado.status, 201, JSON.stringify(cancelado.data));
+    assert.deepEqual([cancelado.data.status, cancelado.data.cancelReason, cancelado.data.refundPending], ['cancelled', 'Cliente desistiu', false]);
   });
 
   await check('tempo real: pedido novo chega na tela da loja na hora, e só na dela', async () => {
@@ -1639,6 +1642,110 @@ async function main() {
     assert.ok(!(await concorrente.fim()).includes('Gabi'));
     // sem login não abre o canal
     assert.equal((await fetch(`${base}/api/menu/events`)).status, 401);
+  });
+
+  // ---------- mesas (app do garçom) ----------
+  await api('PATCH', '/api/menu/settings', { tables: 10 });
+  // direto no banco e com token assinado: o plano já está no limite de usuários e o de logins por IP (10 em 5 min) também
+  const { AuthService } = await import('../src/modules/auth');
+  const userGarcom = await db.user.create({
+    data: { companyId: ana.companyId, name: 'Gui Garçom', email: 'garcom@teste.com', passwordHash: await bcrypt.hash('senha1234', 4), role: 'garcom' },
+  });
+  const garcom = client(base, `lf_session=${await app.get(AuthService).sign(userGarcom)}`);
+  const pizzaMesa = { product_id: pizzaCal.data.id, quantity: 1, size: 'Grande' };
+
+  await check('garçom lança na mesa: preço do servidor, sem taxa de entrega; mesa fora do salão é recusada', async () => {
+    const cat = await garcom('GET', '/api/menu/catalog');
+    assert.equal(cat.data.products?.length > 0, true, JSON.stringify(cat));
+    const r = await garcom('POST', '/api/menu/tables/3/orders', { items: [pizzaMesa], notes: 'sem cebola' });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.deepEqual([r.data.table, r.data.deliveryFeeCents, r.data.paymentMethod, r.data.totalCents], [3, 0, 'comanda', 5000]);
+    assert.match(r.data.notes, /sem cebola · Garçom: Gui Garçom/);
+    assert.equal((await garcom('POST', '/api/menu/tables/11/orders', { items: [pizzaMesa] })).status, 400);
+    assert.equal((await garcom('POST', '/api/menu/tables/0/orders', { items: [pizzaMesa] })).status, 400);
+  });
+
+  let pedidoItens = '';
+  await check('cancelar: garçom só o pedido Novo, com motivo; servido só o caixa; tirar item refaz o total', async () => {
+    const segundo = await garcom('POST', '/api/menu/tables/3/orders', { items: [{ ...pizzaMesa, quantity: 2 }] });
+    const servido = await api('PATCH', `/api/menu/orders/${segundo.data.id}/status`, { status: 'delivered' });
+    assert.equal(servido.status, 200, JSON.stringify(servido.data));
+    assert.equal(servido.data.saleId, undefined);
+    // lançado errado: o garçom cancela, mas precisa dizer o motivo
+    const errado = await garcom('POST', '/api/menu/tables/3/orders', { items: [pizzaMesa] });
+    assert.equal((await garcom('POST', `/api/menu/orders/${errado.data.id}/cancel`, { reason: '' })).status, 400);
+    const c = await garcom('POST', `/api/menu/orders/${errado.data.id}/cancel`, { reason: 'Lançado na mesa errada' });
+    assert.equal(c.status, 201, JSON.stringify(c.data));
+    assert.equal((await garcom('POST', `/api/menu/orders/${errado.data.id}/cancel`, { reason: 'de novo' })).status, 400);
+    // a cozinha já aceitou/serviu: garçom não cancela nem tira item
+    assert.equal((await garcom('POST', `/api/menu/orders/${segundo.data.id}/cancel`, { reason: 'Demorou' })).status, 403);
+    assert.equal((await garcom('POST', `/api/menu/orders/${segundo.data.id}/items/0/cancel`, { reason: 'Demorou' })).status, 403);
+    // caixa tira um item: o total do pedido cai junto
+    const dois = await garcom('POST', '/api/menu/tables/3/orders', { items: [pizzaMesa, { ...pizzaMesa, size: 'Média' }] });
+    assert.equal(dois.data.totalCents, 9000);
+    pedidoItens = dois.data.id;
+    assert.equal((await api('POST', `/api/menu/orders/${pedidoItens}/items/9/cancel`, { reason: 'Não pediu' })).status, 400);
+    const menos = await api('POST', `/api/menu/orders/${pedidoItens}/items/1/cancel`, { reason: 'Não pediu' });
+    assert.equal(menos.status, 201, JSON.stringify(menos.data));
+    assert.deepEqual([menos.data.items.length, menos.data.totalCents, menos.data.status], [1, 5000, 'pending']);
+    const mesas = (await garcom('GET', '/api/menu/tables')).data;
+    assert.deepEqual([mesas.tables, mesas.serviceFeePercent], [10, 10]);
+    assert.deepEqual(mesas.orders.map((o: any) => [o.table, o.totalCents]), [[3, 5000], [3, 10000], [3, 5000]]);
+    const motivo = await db.menuOrder.findUniqueOrThrow({ where: { id: errado.data.id } });
+    assert.deepEqual([motivo.status, motivo.cancelReason], ['cancelled', 'Lançado na mesa errada']);
+  });
+
+  await check('transferir: um pedido ou a mesa inteira; destino ocupado junta as contas', async () => {
+    assert.equal((await garcom('POST', '/api/menu/tables/3/transfer', { to: 11 })).status, 400);
+    assert.equal((await garcom('POST', '/api/menu/tables/3/transfer', { to: 3 })).status, 400);
+    assert.equal((await garcom('POST', '/api/menu/tables/4/transfer', { to: 5 })).status, 400); // mesa 4 está livre
+    const um = await garcom('POST', '/api/menu/tables/3/transfer', { to: 5, orderIds: [pedidoItens] });
+    assert.deepEqual(um.data, { from: 3, to: 5, moved: 1 });
+    const porMesa = async () => (await garcom('GET', '/api/menu/tables')).data.orders.map((o: any) => o.table).sort();
+    assert.deepEqual(await porMesa(), [3, 3, 5]);
+    // pedido que não está na mesa de origem não vai
+    assert.equal((await garcom('POST', '/api/menu/tables/3/transfer', { to: 6, orderIds: [pedidoItens] })).status, 400);
+    assert.equal((await garcom('POST', '/api/menu/tables/5/transfer', { to: 3 })).data.moved, 1);
+    assert.deepEqual(await porMesa(), [3, 3, 3]);
+  });
+
+  await check('fechar a conta: uma venda, taxa de serviço de 10% e conta dividida em formas diferentes', async () => {
+    const fPix = formasCard.find((m: any) => m.type === 'pix');
+    assert.equal((await garcom('POST', '/api/menu/tables/3/close', { payments: [{ paymentMethodId: fDinheiro.id, amountCents: 22000 }] })).status, 403);
+    // consumo 200,00 + 10% = 220,00: soma errada e crediário são recusados
+    const errada = await api('POST', '/api/menu/tables/3/close', { payments: [{ paymentMethodId: fDinheiro.id, amountCents: 20000 }] });
+    assert.match(errada.data.message, /diferentes do total/);
+    assert.match((await api('POST', '/api/menu/tables/3/close', { payments: [{ paymentMethodId: fCrediario.id, amountCents: 22000 }] })).data.message, /Crediário/);
+    const r = await api('POST', '/api/menu/tables/3/close', {
+      payments: [{ paymentMethodId: fDinheiro.id, amountCents: 12000, receivedCents: 15000 }, { paymentMethodId: fPix.id, amountCents: 10000 }],
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.deepEqual([r.data.totalCents, r.data.serviceCents], [22000, 2000]);
+    const sale = await db.sale.findUniqueOrThrow({ where: { id: r.data.saleId }, include: { items: true, payments: true } });
+    assert.deepEqual([sale.totalCents, sale.changeCents], [22000, 3000]);
+    assert.deepEqual(sale.items.map((i) => [i.name, i.quantity, i.totalCents]),
+      [['Calabresa (Grande)', 1, 5000], ['Calabresa (Grande)', 2, 10000], ['Calabresa (Grande)', 1, 5000], ['Taxa de serviço', 1, 2000]]);
+    assert.deepEqual(sale.payments.map((p) => [p.methodType, p.amountCents]).sort(), [['dinheiro', 12000], ['pix', 10000]]);
+    assert.match(sale.notes!, /Mesa 3/);
+    // taxa de serviço não mexe em estoque
+    const taxa = await db.product.findFirstOrThrow({ where: { companyId: ana.companyId, sku: 'MESA-SERVICO' } });
+    assert.equal(await db.stock.count({ where: { productId: taxa.id } }), 0);
+    const pedidos = await db.menuOrder.findMany({ where: { companyId: ana.companyId, table: 3 } });
+    assert.deepEqual(pedidos.map((o) => [o.status, o.saleId === sale.id]).sort(),
+      [['cancelled', false], ['delivered', true], ['delivered', true], ['delivered', true]]);
+    assert.deepEqual((await garcom('GET', '/api/menu/tables')).data.orders, []);
+    assert.equal((await api('POST', '/api/menu/tables/3/close', { payments: [{ paymentMethodId: fDinheiro.id, amountCents: 100 }] })).status, 400);
+
+    // cliente recusou a taxa: sai só o consumo
+    await garcom('POST', '/api/menu/tables/4/orders', { items: [pizzaMesa] });
+    const semTaxa = await api('POST', '/api/menu/tables/4/close', { serviceFee: false, payments: [{ paymentMethodId: fDinheiro.id, amountCents: 5000 }] });
+    assert.deepEqual([semTaxa.status, semTaxa.data.totalCents, semTaxa.data.serviceCents], [201, 5000, 0]);
+
+    // fechadas no dia: quem fechou e a taxa; venda comum do dia não entra
+    const fechadas = (await garcom('GET', '/api/menu/tables/closed')).data.rows;
+    assert.deepEqual(fechadas.map((x: any) => [x.table, x.totalCents, x.serviceCents, x.closedBy, x.orders.length]).sort(),
+      [[3, 22000, 2000, 'Dona Ana', 3], [4, 5000, 0, 'Dona Ana', 1]]);
+    assert.deepEqual((await api('GET', '/api/menu/tables/closed?date=2000-01-01')).data.rows, []);
   });
 
   await app.close();

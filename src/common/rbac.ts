@@ -3,7 +3,7 @@
  * Role/Permission/UserRole — a criação de funções personalizadas está no roadmap
  * e cabe aqui virando uma tabela `Role` com a mesma lista de strings.
  */
-export const ROLES = ['proprietario', 'admin', 'gerente', 'caixa', 'estoquista', 'financeiro'] as const;
+export const ROLES = ['proprietario', 'admin', 'gerente', 'caixa', 'estoquista', 'financeiro', 'garcom'] as const;
 export type Role = (typeof ROLES)[number];
 
 export const PERMISSIONS = [
@@ -29,6 +29,7 @@ export const PERMISSIONS = [
 
   'pedido.visualizar', 'pedido.gerenciar', // pedidos do cardápio digital
   'cardapio.gerenciar', // aparência, horário e entrega do cardápio
+  'mesa.atender', // app do garçom: lançar pedido na mesa e ver a comanda (fechar a conta pede pedido.gerenciar)
 
   'financeiro.visualizar', 'financeiro.gerenciar',
 
@@ -43,8 +44,10 @@ const CAIXA: Permission[] = [
   'cliente.visualizar', 'cliente.gerenciar',
   'pdv.acessar', 'pdv.cancelar_item', 'venda.visualizar',
   'caixa.visualizar', 'caixa.abrir', 'caixa.fechar',
-  'pedido.visualizar', 'pedido.gerenciar',
+  'pedido.visualizar', 'pedido.gerenciar', 'mesa.atender',
 ];
+
+const GARCOM: Permission[] = ['produto.visualizar', 'pedido.visualizar', 'mesa.atender'];
 
 const ESTOQUISTA: Permission[] = [
   'dashboard.visualizar', 'produto.visualizar', 'produto.criar', 'produto.editar', 'categoria.gerenciar',
@@ -70,6 +73,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   caixa: CAIXA,
   estoquista: ESTOQUISTA,
   financeiro: FINANCEIRO,
+  garcom: GARCOM,
 };
 
 export const ROLE_LABELS: Record<Role, string> = {
@@ -79,6 +83,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   caixa: 'Caixa',
   estoquista: 'Estoquista',
   financeiro: 'Financeiro',
+  garcom: 'Garçom',
 };
 
 export function can(role: string, permission: Permission): boolean {

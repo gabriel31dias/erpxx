@@ -864,7 +864,8 @@ model MenuOrder {
   number           Int
   customerName     String
   customerPhone    String
-  deliveryType     String // delivery | pickup
+  deliveryType     String // delivery | pickup | table
+  table            Int? // mesa (pedido do garçom); a comanda da mesa = pedidos dela ainda sem venda
   address          String  @default("")
   notes            String  @default("")
   // JSON: [{ productId, name, quantity, unitCents, additionals: [{name, priceCents}], totalCents }]
@@ -872,12 +873,13 @@ model MenuOrder {
   subtotalCents    Int
   deliveryFeeCents Int
   totalCents       Int
-  paymentMethod    String // whatsapp | pix
-  paymentStatus    String  @default("none") // none | pending | approved | rejected
+  paymentMethod    String // whatsapp | pix | comanda (paga ao fechar a conta da mesa)
+  paymentStatus    String  @default("none") // none | pending | approved | rejected | refund_pending (Pix pago e cancelado: estornar no gateway)
   pixChargeId      String?
   pixQrCode        String?
   pixQrImage       String? // base64 do PNG, sem o prefixo data:
   status           String  @default("pending") // pending | preparing | delivering | delivered | cancelled
+  cancelReason     String? // motivo do cancelamento (pedido inteiro)
   saleId           String? // venda gerada quando o pedido é entregue
 
   createdAt DateTime @default(now())
@@ -887,6 +889,7 @@ model MenuOrder {
 
   @@unique([companyId, number])
   @@index([companyId, status, createdAt])
+  @@index([companyId, table, saleId])
 }
 
 // ---------- Caixa ----------

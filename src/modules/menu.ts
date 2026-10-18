@@ -4,7 +4,7 @@
  * então o app só troca o endereço da API.
  */
 import {
-  BadRequestException, Body, Controller, Get, Header, HttpCode, Inject, Injectable, Logger, MessageEvent, Module,
+  BadRequestException, Body, Controller, ForbiddenException, Get, Header, HttpCode, Inject, Injectable, Logger, MessageEvent, Module,
   NotFoundException, Param, Patch, Post, Query, Req, Sse, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
 import { Observable, Subject, filter, interval, map, merge } from 'rxjs';
@@ -18,15 +18,16 @@ import {
   ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEmail, IsIn, IsInt, IsOptional, IsString, Matches, Max,
   MaxLength, Min, MinLength, ValidateIf, ValidateNested,
 } from 'class-validator';
-import type { MenuOrder, Company } from '@prisma/client';
+import type { MenuOrder, Company, Prisma } from '@prisma/client';
 import type { Request } from 'express';
 import { PRISMA, Db } from '../common/prisma.service';
 import { CurrentUser, Perms, Public, SessionUser, SkipCsrf } from '../common/auth.guard';
 import { AuditService, PlanService } from '../common/core';
-import { paging, waPhone } from '../common/util';
+import { DATE_RE, paging, today, waPhone } from '../common/util';
 import { PaymentsModule, PixGateway } from './payments';
 import type { UploadFile } from './attachments';
-import { MENU_FEE_SKU, MENU_ROLE, SalesModule, SalesService } from './sales';
+import { MENU_FEE_SKU, MENU_ROLE, MENU_SERVICE_SKU, SalesModule, SalesService } from './sales';
+import { can } from '../common/rbac';
 
 /**
  * Fotos do cardápio (logo, banner, produtos). Pasta própria e pública, servida em /uploads/menu
@@ -159,6 +160,8 @@ export const DEFAULT_MENU = {
   acceptsPickup: true,
   whatsappEnabled: true,
   pixEnabled: false, // além disso, o PIX da empresa precisa estar configurado
+  tables: 20, // mesas do salão no app do garçom (0 = sem atendimento em mesa)
+  serviceFeePercent: 10, // taxa de serviço da mesa; o caixa pode tirar ao fechar (0 = sem taxa)
 };
 export type MenuSettings = typeof DEFAULT_MENU;
 
@@ -267,6 +270,53 @@ function whatsappUrl(c: Company, o: MenuOrder) {
   return `https://wa.me/${phone}?text=${encodeURIComponent(lines.join('\n'))}`;
 }
 
+/** catálogo no formato do app: cliente (público) e garçom (logado) leem o mesmo */
+async function catalog(db: Db, c: Company, m: MenuSettings) {
+  const [categories, products] = await Promise.all([
+    db.category.findMany({
+      where: { companyId: c.id, active: true, deletedAt: null },
+      orderBy: [{ position: 'asc' }, { name: 'asc' }],
+    }),
+    db.product.findMany({
+      where: { companyId: c.id, active: true, menuVisible: true, deletedAt: null },
+      orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+    }),
+  ]);
+  return {
+    store: toApiStore(c, m),
+    categories: categories.map((x) => ({ id: x.id, name: x.name, max_flavors: x.maxFlavors })),
+    products: products.map(toApiProduct),
+  };
+}
+
+/** preço do carrinho com produtos e categorias do banco; erro de escolha vira 400 */
+async function priceFromDb(db: Db, companyId: string, lines: CartLine[], deliveryFeeCents: number) {
+  const ids = lines.flatMap((i) => [i.product_id, ...(i.flavors ?? [])]);
+  const [products, categories] = await Promise.all([
+    db.product.findMany({ where: { companyId, id: { in: ids }, deletedAt: null } }),
+    db.category.findMany({ where: { companyId, deletedAt: null } }),
+  ]);
+  try {
+    return priceCart(
+      lines,
+      products.map((p) => ({ ...p, ...menuOptions(p.menuOptions), available: p.active && p.menuVisible })),
+      deliveryFeeCents,
+      Object.fromEntries(categories.map((x) => [x.id, x.maxFlavors])),
+    );
+  } catch (e) {
+    throw new BadRequestException((e as Error).message);
+  }
+}
+
+/** número sequencial por empresa: trava a linha da empresa até o commit (mesmo esquema da venda) */
+function insertOrder(db: Db, companyId: string, data: Omit<Prisma.MenuOrderUncheckedCreateInput, 'companyId' | 'number'>) {
+  return db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Company" WHERE id = ${companyId} FOR UPDATE`;
+    const last = await tx.menuOrder.aggregate({ where: { companyId }, _max: { number: true } });
+    return tx.menuOrder.create({ data: { ...data, companyId, number: (last._max.number ?? 0) + 1 } });
+  });
+}
+
 // ---------- tempo real: avisa a tela de pedidos ----------
 
 type MenuEvent = { companyId: string; type: 'new' | 'update'; id: string; number: number; customerName: string; status: string };
@@ -343,21 +393,7 @@ export class PublicMenuController {
   @Get('stores/:slug')
   async menu(@Param('slug') slug: string) {
     const { c, m } = await this.company(slug);
-    const [categories, products] = await Promise.all([
-      this.db.category.findMany({
-        where: { companyId: c.id, active: true, deletedAt: null },
-        orderBy: [{ position: 'asc' }, { name: 'asc' }],
-      }),
-      this.db.product.findMany({
-        where: { companyId: c.id, active: true, menuVisible: true, deletedAt: null },
-        orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
-      }),
-    ]);
-    return {
-      store: toApiStore(c, m),
-      categories: categories.map((x) => ({ id: x.id, name: x.name, max_flavors: x.maxFlavors })),
-      products: products.map(toApiProduct),
-    };
+    return catalog(this.db, c, m);
   }
 
   @Post('stores/:slug/orders')
@@ -372,45 +408,19 @@ export class PublicMenuController {
     if (b.payment_method === 'whatsapp' && !(m.whatsappEnabled && waPhone(c.whatsapp)))
       throw new BadRequestException('Pedido por WhatsApp indisponível nesta loja');
 
-    const ids = b.items.flatMap((i) => [i.product_id, ...(i.flavors ?? [])]);
-    const [products, categories] = await Promise.all([
-      this.db.product.findMany({ where: { companyId: c.id, id: { in: ids }, deletedAt: null } }),
-      this.db.category.findMany({ where: { companyId: c.id, deletedAt: null } }),
-    ]);
-    const maxFlavors = Object.fromEntries(categories.map((x) => [x.id, x.maxFlavors]));
-    let cart: ReturnType<typeof priceCart>;
-    try {
-      cart = priceCart(
-        b.items,
-        products.map((p) => ({ ...p, ...menuOptions(p.menuOptions), available: p.active && p.menuVisible })),
-        b.delivery_type === 'delivery' ? m.deliveryFeeCents : 0,
-        maxFlavors,
-      );
-    } catch (e) {
-      throw new BadRequestException((e as Error).message);
-    }
-
-    // número sequencial por empresa: trava a linha da empresa até o commit (mesmo esquema da venda)
-    let order = await this.db.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "Company" WHERE id = ${c.id} FOR UPDATE`;
-      const last = await tx.menuOrder.aggregate({ where: { companyId: c.id }, _max: { number: true } });
-      return tx.menuOrder.create({
-        data: {
-          companyId: c.id,
-          number: (last._max.number ?? 0) + 1,
-          customerName: b.customer_name.trim(),
-          customerPhone: b.customer_phone.trim(),
-          deliveryType: b.delivery_type,
-          address: b.delivery_type === 'delivery' ? (b.address ?? '').trim() : '',
-          notes: (b.notes ?? '').trim(),
-          items: JSON.stringify(cart.items),
-          subtotalCents: cart.subtotalCents,
-          deliveryFeeCents: cart.deliveryFeeCents,
-          totalCents: cart.totalCents,
-          paymentMethod: b.payment_method,
-          paymentStatus: b.payment_method === 'pix' ? 'pending' : 'none',
-        },
-      });
+    const cart = await priceFromDb(this.db, c.id, b.items, b.delivery_type === 'delivery' ? m.deliveryFeeCents : 0);
+    let order = await insertOrder(this.db, c.id, {
+      customerName: b.customer_name.trim(),
+      customerPhone: b.customer_phone.trim(),
+      deliveryType: b.delivery_type,
+      address: b.delivery_type === 'delivery' ? (b.address ?? '').trim() : '',
+      notes: (b.notes ?? '').trim(),
+      items: JSON.stringify(cart.items),
+      subtotalCents: cart.subtotalCents,
+      deliveryFeeCents: cart.deliveryFeeCents,
+      totalCents: cart.totalCents,
+      paymentMethod: b.payment_method,
+      paymentStatus: b.payment_method === 'pix' ? 'pending' : 'none',
     });
 
     if (b.payment_method === 'pix') {
@@ -485,7 +495,8 @@ export class PublicMenuController {
 
 // ---------- backoffice (ERP) ----------
 
-const STATUSES = ['pending', 'preparing', 'delivering', 'delivered', 'cancelled'];
+// cancelar tem rota própria (pede motivo): POST orders/:id/cancel
+const STATUSES = ['pending', 'preparing', 'delivering', 'delivered'];
 const urlField = () => Matches(/^(\/[\w./-]+|https?:\/\/\S+)?$/, { message: 'URL de imagem inválida' });
 
 class MenuSettingsDto {
@@ -508,6 +519,8 @@ class MenuSettingsDto {
   @IsOptional() @IsBoolean() acceptsPickup?: boolean;
   @IsOptional() @IsBoolean() whatsappEnabled?: boolean;
   @IsOptional() @IsBoolean() pixEnabled?: boolean;
+  @IsOptional() @IsInt() @Min(0) @Max(500) tables?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(30) serviceFeePercent?: number;
 }
 
 class StatusDto {
@@ -518,6 +531,48 @@ class StatusDto {
   @IsOptional() @IsInt() @Min(0) receivedCents?: number;
   @IsOptional() @IsString() branchId?: string;
 }
+
+class TableOrderDto {
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(50) @ValidateNested({ each: true }) @Type(() => LineDto) items!: LineDto[];
+  @IsOptional() @IsString() @MaxLength(300) notes?: string;
+}
+
+class CancelDto {
+  @IsString() @MinLength(3, { message: 'Informe o motivo do cancelamento.' }) @MaxLength(200) reason!: string;
+}
+
+class PayLineDto {
+  @IsString() paymentMethodId!: string;
+  @IsInt() @Min(1) amountCents!: number;
+  /** dinheiro entregue pelo cliente, para o troco */
+  @IsOptional() @IsInt() @Min(0) receivedCents?: number;
+}
+
+class CloseTableDto {
+  /** conta dividida: uma linha por pagamento; a soma tem que bater com o total (com a taxa) */
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(20) @ValidateNested({ each: true }) @Type(() => PayLineDto) payments!: PayLineDto[];
+  /** taxa de serviço é opcional para o cliente: o caixa desliga aqui */
+  @IsOptional() @IsBoolean() serviceFee?: boolean;
+  @IsOptional() @IsString() branchId?: string;
+}
+
+class TransferDto {
+  @IsInt() @Min(1) to!: number;
+  /** vazio = mesa inteira */
+  @IsOptional() @IsArray() @ArrayMaxSize(100) @IsString({ each: true }) orderIds?: string[];
+}
+
+type PayLine = { paymentMethodId: string; amountCents: number; receivedCents?: number };
+
+/** taxa de serviço sobre o consumo, arredondada no centavo */
+export const serviceCents = (consumoCents: number, percent: number) => Math.round((consumoCents * percent) / 100);
+
+/** número da mesa da URL: inteiro de 1 até o total de mesas */
+const tableOf = (t: string, max: number) => {
+  const n = Number(t);
+  if (!Number.isInteger(n) || n < 1 || n > max) throw new BadRequestException('Mesa inválida.');
+  return n;
+};
 
 @Controller('api/menu')
 export class MenuController {
@@ -598,10 +653,15 @@ export class MenuController {
     const o = await this.db.menuOrder.findFirst({ where: { id, companyId: u.companyId } });
     if (!o) throw new NotFoundException('Pedido não encontrado.');
     if (o.saleId) throw new BadRequestException('Pedido já entregue e lançado como venda. Para desfazer, cancele a venda.');
-    if (dto.status !== 'cancelled' && ['pending', 'rejected'].includes(o.paymentStatus)) {
-      throw new BadRequestException('Pix ainda não foi pago.');
-    }
-    const saleId = dto.status === 'delivered' ? await this.toSale(u, o, dto, req.ip) : null;
+    if (o.status === 'cancelled') throw new BadRequestException('Pedido cancelado.');
+    if (['pending', 'rejected'].includes(o.paymentStatus)) throw new BadRequestException('Pix ainda não foi pago.');
+    // mesa: "entregue" é servido; a venda sai ao fechar a conta (closeTable)
+    const pay = dto.paymentMethodId
+      ? [{ paymentMethodId: dto.paymentMethodId, amountCents: o.totalCents, receivedCents: dto.receivedCents }]
+      : undefined;
+    const saleId = dto.status === 'delivered' && o.table == null
+      ? await this.toSale(u, [o], { payments: pay, branchId: dto.branchId }, req.ip)
+      : null;
     const updated = await this.db.menuOrder.update({ where: { id }, data: { status: dto.status, ...(saleId ? { saleId } : {}) } });
     await this.audit.log(u, 'status', 'MenuOrder', id, { numero: o.number, de: o.status, para: dto.status }, req.ip);
     this.events.emit('update', updated);
@@ -610,40 +670,227 @@ export class MenuController {
   }
 
   /**
-   * Pedido entregue vira venda pelas mesmas regras do PDV: caixa aberto, baixa de estoque,
-   * movimento de caixa e receita no financeiro. Chave de idempotência pelo pedido: clique
-   * duplo ou nova tentativa devolve a mesma venda.
+   * Garçom só cancela pedido de mesa que a cozinha ainda não aceitou (lançado errado).
+   * Depois disso, só quem gerencia pedidos (caixa/gerente): a comida pode estar saindo.
    */
-  private async toSale(u: SessionUser, o: MenuOrder, dto: StatusDto, ip?: string) {
-    let payment: { paymentMethodId: string; amountCents: number; receivedCents?: number };
+  private async cancelable(u: SessionUser, id: string) {
+    const o = await this.db.menuOrder.findFirst({ where: { id, companyId: u.companyId } });
+    if (!o) throw new NotFoundException('Pedido não encontrado.');
+    if (o.saleId) throw new BadRequestException('Pedido já lançado como venda. Para desfazer, cancele a venda.');
+    if (o.status === 'cancelled') throw new BadRequestException('Pedido já cancelado.');
+    if (!can(u.role, 'pedido.gerenciar') && !(o.table != null && o.status === 'pending')) {
+      throw new ForbiddenException('A cozinha já aceitou este pedido: peça ao caixa ou ao gerente para cancelar.');
+    }
+    return o;
+  }
+
+  @Post('orders/:id/cancel') @Perms('mesa.atender')
+  async cancel(@CurrentUser() u: SessionUser, @Param('id') id: string, @Body() dto: CancelDto, @Req() req: Request) {
+    const o = await this.cancelable(u, id);
+    const reason = dto.reason.trim();
+    // Pix pago não volta sozinho: fica marcado para o estorno no gateway
+    const refund = o.paymentMethod === 'pix' && o.paymentStatus === 'approved';
+    const updated = await this.db.menuOrder.update({
+      where: { id }, data: { status: 'cancelled', cancelReason: reason, ...(refund ? { paymentStatus: 'refund_pending' } : {}) },
+    });
+    await this.audit.log(u, 'cancel', 'MenuOrder', id, { numero: o.number, mesa: o.table, de: o.status, motivo: reason }, req.ip);
+    this.events.emit('update', updated);
+    const { pixQrImage, pixQrCode, items, ...rest } = updated;
+    return { ...rest, items: JSON.parse(items), refundPending: refund };
+  }
+
+  /** tira um item do pedido da mesa e refaz o total; sem itens, o pedido é cancelado */
+  @Post('orders/:id/items/:index/cancel') @Perms('mesa.atender')
+  async cancelItem(
+    @CurrentUser() u: SessionUser, @Param('id') id: string, @Param('index') index: string, @Body() dto: CancelDto, @Req() req: Request,
+  ) {
+    const o = await this.cancelable(u, id);
+    // pedido do cardápio já foi pago/combinado pelo total: lá só cancela inteiro
+    if (o.table == null) throw new BadRequestException('Só dá para tirar item de pedido de mesa.');
+    const items = itemsOf(o);
+    const i = Number(index);
+    if (!Number.isInteger(i) || !items[i]) throw new BadRequestException('Item não encontrado.');
+    if (items.length === 1) return this.cancel(u, id, dto, req);
+    const [removed] = items.splice(i, 1);
+    const subtotalCents = items.reduce((s, x) => s + x.totalCents, 0);
+    const updated = await this.db.menuOrder.update({
+      where: { id }, data: { items: JSON.stringify(items), subtotalCents, totalCents: subtotalCents + o.deliveryFeeCents },
+    });
+    await this.audit.log(u, 'cancel_item', 'MenuOrder', id,
+      { numero: o.number, mesa: o.table, item: `${removed.quantity}x ${removed.name}`, valor: removed.totalCents, motivo: dto.reason.trim() }, req.ip);
+    this.events.emit('update', updated);
+    const { pixQrImage, pixQrCode, items: json, ...rest } = updated;
+    return { ...rest, items: JSON.parse(json) };
+  }
+
+  // ---------- mesas (app do garçom) ----------
+
+  /** mesmo catálogo do cliente, sem exigir o cardápio público ligado */
+  @Get('catalog') @Perms('mesa.atender')
+  async catalog(@CurrentUser() u: SessionUser) {
+    const c = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
+    return catalog(this.db, c, menuOf(c));
+  }
+
+  /** comandas abertas: pedidos de mesa ainda sem venda (o app agrupa por mesa) */
+  @Get('tables') @Perms('mesa.atender')
+  async tables(@CurrentUser() u: SessionUser) {
+    const c = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
+    const rows = await this.db.menuOrder.findMany({
+      where: { companyId: u.companyId, table: { not: null }, saleId: null, status: { not: 'cancelled' } },
+      orderBy: { createdAt: 'asc' },
+    });
+    const m = menuOf(c);
+    return { tables: m.tables, serviceFeePercent: m.serviceFeePercent, orders: rows.map(({ pixQrImage, pixQrCode, items, ...o }) => ({ ...o, items: JSON.parse(items) })) };
+  }
+
+  /** contas de mesa fechadas no dia (fuso da empresa): quem fechou é o operador da venda */
+  @Get('tables/closed') @Perms('mesa.atender')
+  async closedTables(@CurrentUser() u: SessionUser, @Query('date') date = '') {
+    const c = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
+    const day = DATE_RE.test(date) ? date : today(c.timezone);
+    const sales = await this.db.sale.findMany({
+      where: { companyId: u.companyId, soldAt: { gte: `${day} 00:00`, lte: `${day} 23:59` }, notes: { startsWith: 'Mesa ' } },
+      include: { operator: { select: { name: true } }, payments: { select: { methodName: true } } },
+      orderBy: { soldAt: 'desc' },
+    });
+    const orders = await this.db.menuOrder.findMany({
+      where: { companyId: u.companyId, saleId: { in: sales.map((s) => s.id) }, table: { not: null } },
+      select: { saleId: true, table: true, number: true, totalCents: true },
+    });
+    return {
+      date: day,
+      rows: sales.flatMap((s) => {
+        const mine = orders.filter((o) => o.saleId === s.id);
+        if (!mine.length) return []; // venda comum com observação "Mesa ..." não é conta de mesa
+        return [{
+          saleId: s.id, saleNumber: s.number, table: mine[0].table, orders: mine.map((o) => o.number).sort((a, b) => a - b),
+          totalCents: s.totalCents, status: s.status, closedAt: s.soldAt, closedBy: s.operator?.name ?? null,
+          payments: s.payments.map((p) => p.methodName),
+          // o que passou do consumo é a taxa de serviço
+          serviceCents: s.totalCents - mine.reduce((t, o) => t + o.totalCents, 0),
+        }];
+      }),
+    };
+  }
+
+  @Post('tables/:table/orders') @Perms('mesa.atender')
+  async tableOrder(@CurrentUser() u: SessionUser, @Param('table') t: string, @Body() b: TableOrderDto, @Req() req: Request) {
+    const c = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
+    const table = tableOf(t, menuOf(c).tables);
+    const cart = await priceFromDb(this.db, c.id, b.items, 0);
+    const order = await insertOrder(this.db, c.id, {
+      table,
+      customerName: `Mesa ${table}`,
+      customerPhone: '',
+      deliveryType: 'table',
+      notes: [(b.notes ?? '').trim(), `Garçom: ${u.name}`].filter(Boolean).join(' · '),
+      items: JSON.stringify(cart.items),
+      subtotalCents: cart.subtotalCents,
+      deliveryFeeCents: 0,
+      totalCents: cart.totalCents,
+      paymentMethod: 'comanda',
+    });
+    await this.audit.log(u, 'create', 'MenuOrder', order.id, { numero: order.number, mesa: table }, req.ip);
+    this.events.emit('new', order);
+    return { ...order, items: cart.items };
+  }
+
+  /** passa a mesa inteira (ou só alguns pedidos) para outra; destino ocupado junta as contas */
+  @Post('tables/:table/transfer') @Perms('mesa.atender')
+  async transfer(@CurrentUser() u: SessionUser, @Param('table') t: string, @Body() dto: TransferDto, @Req() req: Request) {
+    const c = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
+    const from = tableOf(t, 10_000);
+    const to = tableOf(String(dto.to), menuOf(c).tables);
+    if (from === to) throw new BadRequestException('Escolha outra mesa.');
+    const orders = await this.db.menuOrder.findMany({
+      where: {
+        companyId: u.companyId, table: from, saleId: null, status: { not: 'cancelled' },
+        ...(dto.orderIds?.length ? { id: { in: dto.orderIds } } : {}),
+      },
+    });
+    if (!orders.length || (dto.orderIds?.length && orders.length !== new Set(dto.orderIds).size)) {
+      throw new BadRequestException(`Pedido não está aberto na mesa ${from}.`);
+    }
+    await this.db.menuOrder.updateMany({
+      where: { companyId: u.companyId, id: { in: orders.map((o) => o.id) } }, data: { table: to, customerName: `Mesa ${to}` },
+    });
+    await this.audit.log(u, 'transfer', 'MenuTable', String(from), { para: to, pedidos: orders.map((o) => o.number) }, req.ip);
+    for (const o of orders) this.events.emit('update', { ...o, table: to });
+    return { from, to, moved: orders.length };
+  }
+
+  /** fecha a conta: todos os pedidos abertos da mesa viram uma venda só */
+  @Post('tables/:table/close') @Perms('pedido.gerenciar')
+  async closeTable(@CurrentUser() u: SessionUser, @Param('table') t: string, @Body() dto: CloseTableDto, @Req() req: Request) {
+    const table = tableOf(t, 10_000); // mesa que saiu da configuração ainda pode ter conta aberta
+    const orders = await this.db.menuOrder.findMany({
+      where: { companyId: u.companyId, table, saleId: null, status: { not: 'cancelled' } },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!orders.length) throw new BadRequestException(`Mesa ${table} não tem conta aberta.`);
+    const c = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
+    const consumo = orders.reduce((s, o) => s + o.totalCents, 0);
+    const service = dto.serviceFee === false ? 0 : serviceCents(consumo, menuOf(c).serviceFeePercent);
+    const saleId = await this.toSale(u, orders, { payments: dto.payments, branchId: dto.branchId, serviceCents: service }, req.ip);
+    await this.db.menuOrder.updateMany({
+      where: { companyId: u.companyId, id: { in: orders.map((o) => o.id) } }, data: { status: 'delivered', saleId },
+    });
+    await this.audit.log(u, 'close', 'MenuTable', String(table), { pedidos: orders.map((o) => o.number), saleId, taxa: service }, req.ip);
+    for (const o of orders) this.events.emit('update', { ...o, status: 'delivered' });
+    return { saleId, serviceCents: service, totalCents: consumo + service };
+  }
+
+  /**
+   * Pedido entregue (ou conta da mesa) vira venda pelas mesmas regras do PDV: caixa aberto,
+   * baixa de estoque, movimento de caixa e receita no financeiro. Chave de idempotência pelo
+   * primeiro pedido: clique duplo ou nova tentativa devolve a mesma venda.
+   */
+  private async toSale(
+    u: SessionUser, orders: MenuOrder[], pay: { payments?: PayLine[]; branchId?: string; serviceCents?: number }, ip?: string,
+  ) {
+    const o = orders[0];
+    const service = pay.serviceCents ?? 0;
+    const totalCents = orders.reduce((s, x) => s + x.totalCents, 0) + service;
+    let payments: PayLine[];
     if (o.paymentMethod === 'pix') {
       const pix = await this.db.paymentMethod.findFirst({
         where: { companyId: u.companyId, type: 'pix', active: true, deletedAt: null }, orderBy: { sortOrder: 'asc' },
       });
       if (!pix) throw new BadRequestException('Ative a forma de pagamento PIX para lançar pedidos pagos no cardápio.');
-      payment = { paymentMethodId: pix.id, amountCents: o.totalCents };
+      payments = [{ paymentMethodId: pix.id, amountCents: totalCents }];
     } else {
-      if (!dto.paymentMethodId) throw new BadRequestException('Informe como o cliente pagou na entrega.');
-      const m = await this.db.paymentMethod.findFirst({ where: { id: dto.paymentMethodId, companyId: u.companyId, deletedAt: null } });
+      if (!pay.payments?.length) throw new BadRequestException('Informe como o cliente pagou.');
+      const methods = await this.db.paymentMethod.findMany({
+        where: { companyId: u.companyId, id: { in: pay.payments.map((p) => p.paymentMethodId) }, deletedAt: null },
+      });
       // crediário exige cliente cadastrado na venda; pedido do cardápio não tem
-      if (m?.type === 'crediario') throw new BadRequestException('Crediário não vale para pedido do cardápio.');
-      payment = { paymentMethodId: dto.paymentMethodId, amountCents: o.totalCents, receivedCents: dto.receivedCents };
+      if (methods.some((m) => m.type === 'crediario')) throw new BadRequestException('Crediário não vale para pedido do cardápio.');
+      payments = pay.payments; // soma diferente do total: a venda recusa com a mensagem dela
     }
 
-    const items = itemsOf(o).map((i) => ({
+    const items = orders.flatMap(itemsOf).map((i) => ({
       productId: i.productId, quantity: i.quantity, unitPriceCents: i.unitCents,
       menuName: [i.name, ...i.additionals.map((a) => a.name)].join(' + ').slice(0, 200),
     }));
     if (o.deliveryFeeCents) {
       items.push({ productId: await this.feeProduct(u.companyId), quantity: 1, unitPriceCents: o.deliveryFeeCents, menuName: 'Taxa de entrega' });
     }
+    if (service) {
+      items.push({
+        productId: await this.feeProduct(u.companyId, MENU_SERVICE_SKU, 'Taxa de serviço'), quantity: 1, unitPriceCents: service, menuName: 'Taxa de serviço',
+      });
+    }
 
+    const notes = o.table != null
+      ? [`Mesa ${o.table}`, `Pedidos ${orders.map((x) => `#${x.number}`).join(', ')} do cardápio`]
+      : [`Pedido #${o.number} do cardápio`, `${o.customerName} (${o.customerPhone})`,
+        o.deliveryType === 'delivery' ? `Entrega: ${o.address}` : 'Retirada', o.notes];
     const sale = await this.sales.create(
       { companyId: u.companyId, branchId: u.branchId, role: MENU_ROLE, userId: u.sub, sellerId: null },
       {
-        branchId: dto.branchId, items, payments: [payment], idempotencyKey: `menu:${o.id}`,
-        notes: [`Pedido #${o.number} do cardápio`, `${o.customerName} (${o.customerPhone})`,
-          o.deliveryType === 'delivery' ? `Entrega: ${o.address}` : 'Retirada', o.notes].filter(Boolean).join(' · '),
+        branchId: pay.branchId, items, payments, idempotencyKey: `menu:${o.id}`,
+        notes: notes.filter(Boolean).join(' · '),
       },
       ip, undefined,
       o.paymentMethod === 'pix'
@@ -653,11 +900,12 @@ export class MenuController {
     return sale.id;
   }
 
-  private async feeProduct(companyId: string) {
-    const found = await this.db.product.findFirst({ where: { companyId, sku: MENU_FEE_SKU, deletedAt: null } });
+  /** produto interno que leva uma taxa (entrega, serviço) para a venda; criado na primeira vez */
+  private async feeProduct(companyId: string, sku = MENU_FEE_SKU, name = 'Taxa de entrega') {
+    const found = await this.db.product.findFirst({ where: { companyId, sku, deletedAt: null } });
     if (found) return found.id;
     const created = await this.db.product.create({
-      data: { companyId, sku: MENU_FEE_SKU, name: 'Taxa de entrega', priceCents: 0, description: 'Criado pelo cardápio digital.' },
+      data: { companyId, sku, name, priceCents: 0, description: 'Criado pelo cardápio digital.' },
     });
     return created.id;
   }

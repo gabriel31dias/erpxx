@@ -81,6 +81,8 @@ export default async function render({ content, can }) {
     instagram: input({ value: s.instagram, placeholder: '@sualoja' }),
     primaryColor: input({ type: 'color', value: s.primaryColor, style: 'height:38px' }),
     logoSize: input({ type: 'number', min: 20, max: 120, value: s.logoSize }),
+    tables: input({ type: 'number', min: 0, max: 500, value: s.tables }),
+    serviceFeePercent: input({ type: 'number', min: 0, max: 30, value: s.serviceFeePercent }),
   };
   const img = {
     logo: imagem('Logo', 'logoUrl', s.logoUrl, { help: 'Vazio usa o logo da empresa.' }),
@@ -98,6 +100,8 @@ export default async function render({ content, can }) {
     field('Taxa de entrega (R$)', f.deliveryFee, { col: 'col-6 col-md-3' }),
     field('Tempo de entrega', f.deliveryTime, { col: 'col-6 col-md-3' }),
     field('Horário', f.hours, { col: 'col-12 col-md-6' }),
+    field('Mesas no salão', f.tables, { col: 'col-6 col-md-3', help: 'Para o app do garçom (/garcom). 0 = sem mesas.' }),
+    field('Taxa de serviço (%)', f.serviceFeePercent, { col: 'col-6 col-md-3', help: 'Na conta da mesa; o caixa pode tirar ao fechar. 0 = sem taxa.' }),
     h('div', { class: 'col-12' }, h('hr', {})),
     h('h6', { class: 'col-12 txt-primary mb-0' }, 'Aparência'),
     field('Slogan', f.subtitle, { col: 'col-12 col-md-6' }),
@@ -123,6 +127,8 @@ export default async function render({ content, can }) {
         instagram: f.instagram.value.trim(),
         primaryColor: f.primaryColor.value,
         logoSize: Number(f.logoSize.value) || 32,
+        tables: Math.max(0, Number(f.tables.value) || 0),
+        serviceFeePercent: Math.min(30, Math.max(0, Number(f.serviceFeePercent.value) || 0)),
         logoUrl: img.logo.value(),
         bannerUrl: img.banner.value(),
         coverUrl: img.cover.value(),

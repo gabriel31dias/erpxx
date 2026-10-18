@@ -1,14 +1,19 @@
 import React from 'react';
-import { Home, FileText, ShoppingBag, Receipt, MoreHorizontal } from 'lucide-react';
+import { Home, FileText, ShoppingBag, Receipt, MoreHorizontal, LayoutGrid } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export function BottomNav({ activeTabOverride }) {
-  const { activeTab, setActiveTab, navigateTo, cart } = useApp();
+  const { activeTab, setActiveTab, navigateTo, cart, waiter, table } = useApp();
   const current = activeTabOverride || activeTab;
 
   const totalCartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
-  const tabs = [
+  const tabs = waiter ? [
+    { id: 'mesas', label: 'Mesas', icon: LayoutGrid, screen: 'mesas' },
+    { id: 'home', label: 'Cardápio', icon: FileText, screen: 'categoria' },
+    { id: 'meupedido', label: 'Pedido', icon: ShoppingBag, screen: 'carrinho', badge: totalCartCount || undefined },
+    { id: 'comanda', label: table ? `Mesa ${table}` : 'Comanda', icon: Receipt, screen: 'comanda' },
+  ] : [
     { id: 'home', label: 'Início', icon: Home, screen: 'home' },
     { id: 'cardapio', label: 'Cardápio', icon: FileText, screen: 'categoria' },
     { id: 'meupedido', label: 'Carrinho', icon: ShoppingBag, screen: 'carrinho', badge: totalCartCount || undefined },

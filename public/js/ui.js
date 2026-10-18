@@ -120,6 +120,31 @@ export function confirmAction(message, { title = 'Confirmar', okLabel = 'Confirm
   });
 }
 
+/** Pede o motivo (atalhos + texto livre). Resolve com o texto, ou null se desistir. */
+export function askReason(title, { quick = [], okLabel = 'Confirmar' } = {}) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    const texto = h('input', { type: 'text', class: 'form-control', maxlength: 200, placeholder: 'Motivo', 'aria-label': 'Motivo' });
+    const ok = h('button', { class: 'btn btn-danger' }, okLabel);
+    const m = modal({
+      title,
+      body: h('div', {},
+        quick.length ? h('div', { class: 'd-flex flex-wrap gap-2 mb-3' }, quick.map((q) =>
+          h('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', onclick: () => { texto.value = q; texto.focus(); } }, q))) : null,
+        texto),
+      footer: [h('button', { class: 'btn btn-light', 'data-bs-dismiss': 'modal' }, 'Voltar'), ok],
+    });
+    ok.onclick = () => {
+      if (texto.value.trim().length < 3) { texto.classList.add('is-invalid'); texto.focus(); return; }
+      finish(texto.value.trim());
+      m.close();
+    };
+    m.el.addEventListener('shown.bs.modal', () => texto.focus());
+    m.el.addEventListener('hidden.bs.modal', () => finish(null));
+  });
+}
+
 // ---------- estados de tela ----------
 export function emptyState(message, action) {
   return h('div', { class: 'lf-empty' }, icon('inbox', 40), h('p', { class: 'mt-2 mb-3' }, message), action || null);

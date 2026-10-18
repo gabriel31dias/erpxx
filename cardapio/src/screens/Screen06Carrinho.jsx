@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowLeft, Trash2, Plus, Minus, MessageCircle, QrCode } from 'lucide-react';
+import { ArrowLeft, Trash2, Plus, Minus, MessageCircle, QrCode, ChefHat } from 'lucide-react';
 import { useApp, brl } from '../context/AppContext';
 
 export function Screen06Carrinho() {
@@ -13,7 +13,30 @@ export function Screen06Carrinho() {
     navigateTo,
     storeInfo,
     setSelectedPayment,
+    waiter,
+    table,
+    sendToTable,
+    notify,
   } = useApp();
+  const [notes, setNotes] = React.useState('');
+  const [sending, setSending] = React.useState(false);
+  const [error, setError] = React.useState('');
+
+  /** garçom: manda o pedido para a cozinha na comanda da mesa */
+  const send = async () => {
+    if (!table) return navigateTo('mesas');
+    setSending(true);
+    setError('');
+    try {
+      await sendToTable(notes.trim());
+      notify(`Pedido enviado · Mesa ${table}`);
+      navigateTo('comanda');
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSending(false);
+    }
+  };
 
   const checkout = (method) => {
     setSelectedPayment(method);
@@ -123,12 +146,14 @@ export function Screen06Carrinho() {
               <span className="font-bold text-slate-900">{brl(subtotal)}</span>
             </div>
 
-            <div className="flex items-center justify-between text-slate-500 font-medium">
-              <span>Entrega</span>
-              <span className="font-bold text-slate-900">
-                {deliveryFee === 0 ? 'Grátis' : brl(deliveryFee)}
-              </span>
-            </div>
+            {!waiter && (
+              <div className="flex items-center justify-between text-slate-500 font-medium">
+                <span>Entrega</span>
+                <span className="font-bold text-slate-900">
+                  {deliveryFee === 0 ? 'Grátis' : brl(deliveryFee)}
+                </span>
+              </div>
+            )}
 
             <div className="flex items-center justify-between text-sm font-bold text-slate-900 pt-1 border-t border-slate-100">
               <span className="text-base font-black">Total</span>
@@ -141,10 +166,31 @@ export function Screen06Carrinho() {
       {/* Bottom Actions */}
       {cart.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 max-w-[440px] mx-auto p-4 bg-white border-t border-slate-100 shrink-0 z-30 shadow-[0_-4px_20px_rgba(0,0,0,0.06)] space-y-2">
-          {!storeInfo.is_open && (
+          {waiter && (
+            <>
+              <input
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                maxLength={200}
+                placeholder="Observação para a cozinha (opcional)"
+                aria-label="Observação para a cozinha"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 border border-slate-200 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-[var(--brand)]"
+              />
+              {error && <p className="text-center text-xs font-semibold text-red-500">{error}</p>}
+              <button
+                disabled={sending}
+                onClick={send}
+                className="w-full py-3.5 bg-[var(--brand)] hover:brightness-90 active:scale-[0.98] transition-all rounded-2xl text-white font-bold text-sm shadow-lg flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <ChefHat size={19} />
+                <span>{sending ? 'Enviando…' : table ? `Enviar para a cozinha · Mesa ${table}` : 'Escolher a mesa'}</span>
+              </button>
+            </>
+          )}
+          {!waiter && !storeInfo.is_open && (
             <p className="text-center text-xs font-semibold text-red-500">Loja fechada agora — volte no horário {storeInfo.hours}</p>
           )}
-          {storeInfo.whatsapp_enabled && (
+          {!waiter && storeInfo.whatsapp_enabled && (
             <button
               disabled={!storeInfo.is_open}
               onClick={() => checkout('whatsapp')}
@@ -155,7 +201,7 @@ export function Screen06Carrinho() {
             </button>
           )}
 
-          {storeInfo.pix_enabled && (
+          {!waiter && storeInfo.pix_enabled && (
             <button
               disabled={!storeInfo.is_open}
               onClick={() => checkout('pix')}

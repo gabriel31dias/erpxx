@@ -22,7 +22,7 @@ import { Screen17Configuracoes } from './screens/Screen17Configuracoes';
 import { ScreenPix } from './screens/ScreenPix';
 
 export function App() {
-  const { currentScreen, menu, slug, toast } = useApp();
+  const { currentScreen, menu, slug } = useApp();
 
   const renderCurrentScreen = () => {
     switch (currentScreen) {
@@ -86,6 +86,12 @@ export function App() {
     );
   }
 
+  return <AppFrame>{renderCurrentScreen()}</AppFrame>;
+}
+
+/** casca do app (cliente e garçom): coluna de celular, animação de tela e aviso */
+export function AppFrame({ children }) {
+  const { currentScreen, menu, toast } = useApp();
   return (
     <div
       style={{ '--brand': menu.store.primary_color }}
@@ -94,7 +100,7 @@ export function App() {
       <main className="w-full max-w-[440px] min-h-screen bg-[#0E0E10] flex flex-col justify-between shadow-2xl relative overflow-hidden">
         {/* key remounts per screen so the CSS entrance animation replays on every navigation */}
         <div key={currentScreen} className={`flex-1 flex flex-col ${currentScreen === 'detalhe' ? 'anim-sheet-in' : 'anim-fade-in'}`}>
-          {renderCurrentScreen()}
+          {children}
         </div>
         <AnimatePresence>
           {toast && (
