@@ -32,6 +32,8 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;
   if (url.pathname.startsWith('/api/')) return; // dados: quem cuida é o app
+  // cardápio e app do garçom (cardapio/dist) são outro app no mesmo domínio
+  if (/^\/(cardapio|garcom)(\/|$)/.test(url.pathname)) return;
 
   // navegação: tenta a rede e cai para a versão guardada da própria página
   if (req.mode === 'navigate') {

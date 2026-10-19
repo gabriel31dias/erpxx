@@ -153,3 +153,95 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .lf-platform-bar .lf-logo { height: 32px; width: auto; }
 .lf-platform .nav-pills .nav-link { background: #fff; color: inherit; }
 .lf-platform .nav-pills .nav-link.active { background: #363afe; color: #fff; }
+
+/* ---------- pedidos do cardápio: grade de cards ---------- */
+.lf-ped-novo { --ped: #f59e0b; --ped-bg: rgba(245, 158, 11, .12); }
+.lf-ped-preparo { --ped: #3b82f6; --ped-bg: rgba(59, 130, 246, .12); }
+.lf-ped-rota { --ped: #8b5cf6; --ped-bg: rgba(139, 92, 246, .12); }
+.lf-ped-feito { --ped: #16a34a; --ped-bg: rgba(22, 163, 74, .12); }
+.lf-ped-cancelado { --ped: #94a3b8; --ped-bg: rgba(148, 163, 184, .15); }
+
+.lf-ped-resumo { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+@media (max-width: 575px) {
+  .lf-ped-resumo { gap: 8px; }
+  .lf-ped-contador { flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px 12px; }
+  .lf-ped-contador .lf-ped-icone { width: 30px; height: 30px; border-radius: 10px; }
+}
+.lf-ped-contador { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: 14px; border: 1px solid transparent;
+  background: var(--white, #fff); box-shadow: 0 2px 10px rgba(0, 0, 0, .04); text-align: left; transition: transform .15s, border-color .15s; }
+.lf-ped-contador:hover { transform: translateY(-2px); }
+.lf-ped-contador.ativo { border-color: var(--ped); }
+.lf-ped-contador strong { display: block; font-size: 22px; line-height: 1.1; }
+.lf-ped-contador span span { font-size: 12px; opacity: .7; }
+
+.lf-ped-icone { width: 38px; height: 38px; border-radius: 12px; display: inline-grid; place-items: center; flex: 0 0 auto;
+  background: var(--ped-bg); color: var(--ped); }
+
+.lf-ped-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.lf-ped { position: relative; display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: 16px; cursor: pointer;
+  background: var(--white, #fff); border: 1px solid rgba(0, 0, 0, .07); border-top: 4px solid var(--ped);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .04); transition: transform .15s ease, box-shadow .15s ease; }
+.lf-ped:hover, .lf-ped:focus-visible { transform: translateY(-3px); box-shadow: 0 10px 24px rgba(0, 0, 0, .09); outline: none; }
+.lf-ped:focus-visible { box-shadow: 0 0 0 3px var(--ped-bg), 0 10px 24px rgba(0, 0, 0, .09); }
+.lf-ped-topo { display: flex; align-items: center; gap: 10px; }
+.lf-ped-id { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
+.lf-ped-id strong { font-size: 18px; }
+.lf-ped-status { font-size: 12px; font-weight: 600; color: var(--ped); }
+.lf-ped-tempo { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; opacity: .65; white-space: nowrap; }
+.lf-ped-cliente { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lf-ped-itens { font-size: 13px; opacity: .85; line-height: 1.5; min-height: 40px; }
+.lf-ped-itens > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lf-ped-mais { opacity: .6; font-size: 12px; }
+.lf-ped-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.lf-ped-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  background: rgba(0, 0, 0, .05); }
+.lf-ped-chip-alerta { background: rgba(220, 38, 38, .12); color: #dc2626; }
+.lf-ped-rodape { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 10px;
+  border-top: 1px dashed rgba(0, 0, 0, .1); }
+.lf-ped-total { font-size: 18px; font-weight: 700; }
+.lf-ped-qtd { font-size: 11px; opacity: .6; }
+/* sem espaço ao lado do total, o botão desce e ocupa a linha (nunca vaza do card) */
+.lf-ped-rodape .lf-ped-acao { flex: 1 0 auto; max-width: 100%; justify-content: center; }
+.btn.lf-ped-acao { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; background: var(--ped); border-color: var(--ped); color: #fff; font-weight: 600; }
+.btn.lf-ped-acao:hover { filter: brightness(.92); color: #fff; }
+
+/* novo: o sino chama atenção; parado há mais de 10 min, o card inteiro avisa */
+.lf-ped-novo .lf-ped-topo .lf-ped-icone { animation: lf-ped-pulso 1.6s ease-in-out infinite; }
+@keyframes lf-ped-pulso { 0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, .45); } 50% { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); } }
+.lf-ped-atrasado { border-color: rgba(220, 38, 38, .35); border-top-color: #dc2626; }
+.lf-ped-atrasado .lf-ped-tempo { color: #dc2626; opacity: 1; font-weight: 700; }
+@media (prefers-reduced-motion: reduce) {
+  .lf-ped, .lf-ped-contador { transition: none; }
+  .lf-ped-novo .lf-ped-topo .lf-ped-icone { animation: none; }
+}
+.lf-ped-vazio { text-align: center; padding: 48px 0; opacity: .55; }
+
+/* detalhe */
+.lf-ped-status-chip { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: var(--ped-bg); color: var(--ped); }
+.lf-ped-linha { display: flex; list-style: none; padding: 0; margin: 0; }
+.lf-ped-linha li { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 12px; text-align: center;
+  position: relative; opacity: .45; }
+.lf-ped-linha li::before { content: ''; position: absolute; top: 15px; left: -50%; width: 100%; height: 3px; background: rgba(0, 0, 0, .1); z-index: 0; }
+.lf-ped-linha li:first-child::before { display: none; }
+.lf-ped-linha li.feito, .lf-ped-linha li.atual { opacity: 1; }
+.lf-ped-linha li.feito::before, .lf-ped-linha li.atual::before { background: #16a34a; }
+.lf-ped-linha-bola { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; position: relative; z-index: 1;
+  background: rgba(0, 0, 0, .08); }
+.lf-ped-linha li.feito .lf-ped-linha-bola { background: #16a34a; color: #fff; }
+.lf-ped-linha li.atual .lf-ped-linha-bola { background: var(--ped); color: #fff; box-shadow: 0 0 0 5px var(--ped-bg); }
+.lf-ped-linha li.atual { font-weight: 700; }
+.lf-ped-cancel-box { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; background: rgba(148, 163, 184, .15); }
+.lf-ped-det-itens { display: grid; gap: 10px; }
+.lf-ped-det-item { display: flex; gap: 10px; align-items: flex-start; }
+.lf-ped-det-qtd { min-width: 34px; height: 26px; border-radius: 8px; display: grid; place-items: center; font-weight: 700; font-size: 13px;
+  background: rgba(0, 0, 0, .06); }
+.lf-ped-bloco { padding: 12px 14px; border-radius: 12px; background: rgba(0, 0, 0, .03); display: grid; gap: 2px; }
+.lf-ped-bloco-titulo { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .04em; opacity: .6; margin-bottom: 2px; }
+.lf-ped-obs { background: rgba(245, 158, 11, .1); }
+
+body.dark-only .lf-ped, body.dark-only .lf-ped-contador { background: #262932; border-color: rgba(255, 255, 255, .08); }
+body.dark-only .lf-ped { border-top-color: var(--ped); }
+body.dark-only .lf-ped-chip, body.dark-only .lf-ped-det-qtd, body.dark-only .lf-ped-bloco { background: rgba(255, 255, 255, .06); }
+body.dark-only .lf-ped-rodape { border-top-color: rgba(255, 255, 255, .1); }
+body.dark-only .lf-ped-linha li::before, body.dark-only .lf-ped-linha-bola { background: rgba(255, 255, 255, .12); }

@@ -2,6 +2,7 @@
 // Os pedidos entram pelo app do garçom (/garcom); tempo real pelo mesmo SSE da tela de pedidos.
 import { get, post } from '../api.js';
 import { branchId, pageTitle } from '../shell.js';
+import { ouvirPedidos } from '../pedidos-ao-vivo.js';
 import {
   askReason, card, centsToInput, fmtBRL, h, modal, moneyInput, moneyToCents, mount, select, statusBadge, toast,
 } from '../ui.js';
@@ -296,12 +297,11 @@ export default async function render({ content, can }) {
   }
 
   desenhar();
-  const fonte = new EventSource('/api/menu/events');
   const estado = (texto, kind) => { aoVivo.textContent = texto; aoVivo.className = `badge text-bg-${kind}`; };
-  // (re)conectou: recarrega para pegar o que chegou enquanto estava fora
-  fonte.onopen = () => { estado('● Ao vivo', 'success'); carregar(); };
-  fonte.onerror = () => estado('Reconectando…', 'warning');
-  fonte.onmessage = () => carregar();
-  // saiu da tela: fecha a conexão
-  addEventListener('pagehide', () => fonte.close(), { once: true });
+  // conexão da aba (a mesma do alarme); (re)conectou: recarrega o que chegou enquanto estava fora
+  ouvirPedidos({
+    open: () => { estado('● Ao vivo', 'success'); carregar(); },
+    error: () => estado('Reconectando…', 'warning'),
+    message: () => carregar(),
+  });
 }

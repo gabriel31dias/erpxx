@@ -37,6 +37,13 @@ import { MENU_IMAGES_DIR, MenuModule } from './modules/menu';
 const localAssets = join(__dirname, '..', 'public', 'assets');
 const themeAssets = existsSync(localAssets) ? localAssets : join(__dirname, '..', '..', 'assets');
 
+// App do cardápio (cardapio/dist, build com base /cardapio/) no mesmo domínio do ERP:
+// cliente em /cardapio/<slug> e garçom em /garcom. Vem antes do public/, cujo fallback pega tudo.
+const menuApp = join(__dirname, '..', 'cardapio', 'dist');
+const menuAppRoots = existsSync(join(menuApp, 'index.html'))
+  ? [{ rootPath: menuApp, serveRoot: '/cardapio' }, { rootPath: menuApp, serveRoot: '/garcom' }]
+  : [];
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -49,6 +56,7 @@ const themeAssets = existsSync(localAssets) ? localAssets : join(__dirname, '..'
       { rootPath: themeAssets, serveRoot: '/assets' },
       // fotos do cardápio (públicas); comprovantes ficam em data/uploads e não são servidos
       { rootPath: MENU_IMAGES_DIR, serveRoot: '/uploads/menu', serveStaticOptions: { fallthrough: false, index: false } },
+      ...menuAppRoots,
       { rootPath: join(__dirname, '..', 'public'), exclude: ['/api/{*path}'] },
     ),
     AuthModule, CatalogModule, CrmModule, StockModule, SalesModule, CashModule,

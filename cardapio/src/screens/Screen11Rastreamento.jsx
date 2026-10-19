@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { Check } from 'lucide-react';
 import { useApp, brl } from '../context/AppContext';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { pub } from '../lib/api';
 
 const FLOW = ['pending', 'preparing', 'delivering', 'delivered'];
 
@@ -110,7 +111,7 @@ export function Screen11Rastreamento() {
         {!cancelled && (
           <div className="pb-8 pt-4 flex flex-col items-center text-center">
             <div className="w-40 h-28 mb-3 flex items-center justify-center">
-              <img src="/assets/images/delivery_scooter.png" alt="" className="w-full h-full object-contain" />
+              <img src={pub('assets/images/delivery_scooter.png')} alt="" className="w-full h-full object-contain" />
             </div>
             <p className="text-xs text-zinc-300 font-medium max-w-[220px] leading-relaxed">
               {order.status === 'delivered' ? 'Bom apetite!' : 'Seu pedido está sendo preparado com muito carinho!'}

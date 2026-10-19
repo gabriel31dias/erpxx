@@ -1,11 +1,11 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { fetchMenu, createOrder, fetchOrders, waiterApi } from '../lib/api';
+import { fetchMenu, createOrder, fetchOrders, waiterApi, pathParts, pub } from '../lib/api';
 import { useTables } from '../garcom/useTables';
 
 const AppContext = createContext();
 
-// slug da loja: /don-beef ou ?loja=don-beef
-const SLUG = (new URLSearchParams(location.search).get('loja') || location.pathname.split('/')[1] || '').toLowerCase();
+// slug da loja: /cardapio/don-beef ou ?loja=don-beef
+const SLUG = (new URLSearchParams(location.search).get('loja') || pathParts()[0] || '').toLowerCase();
 
 // localStorage pode faltar (aba anônima, bloqueado): nunca quebra o app
 const store = {
@@ -40,8 +40,8 @@ const toAppProduct = (p) => ({
   price: p.price,
   oldPrice: p.old_price,
   description: p.description,
-  image: p.image_url || '/assets/placeholder.svg',
-  thumb: p.image_url || '/assets/placeholder.svg',
+  image: p.image_url || pub('assets/placeholder.svg'),
+  thumb: p.image_url || pub('assets/placeholder.svg'),
   additionals: p.additionals.map((a) => ({ id: a.name, name: a.name, price: a.price })),
   sizes: p.sizes || [],
   optionGroups: p.option_groups || [],

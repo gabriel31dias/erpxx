@@ -1,6 +1,22 @@
 // API pública do cardápio (sem login). Em dev o Vite faz proxy de /api.
 export const BASE = import.meta.env.VITE_API_URL || '';
 
+/** cor do texto que lê bem sobre `hex` (fundo escolhido pela loja) */
+export const onColor = (hex) => {
+  const n = parseInt((hex || '#000000').slice(1), 16);
+  const lum = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  return lum > 0.6 ? '#111111' : '#ffffff';
+};
+
+// o app roda sob um prefixo no domínio do ERP (vite.config.js `base`, ex.: /cardapio/)
+export const pub = (path) => import.meta.env.BASE_URL + path;
+// partes do caminho depois do prefixo: /cardapio/don-beef -> ['don-beef']; /garcom -> ['garcom']
+export const pathParts = () => {
+  const base = import.meta.env.BASE_URL;
+  const p = location.pathname.startsWith(base) ? location.pathname.slice(base.length) : location.pathname;
+  return p.split('/').filter(Boolean);
+};
+
 async function request(path, init) {
   const res = await fetch(`${BASE}/api${path}`, {
     ...init,

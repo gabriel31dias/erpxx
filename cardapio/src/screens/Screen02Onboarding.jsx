@@ -1,5 +1,6 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
+import { pub } from '../lib/api';
 
 export function Screen02Onboarding() {
   const { navigateTo } = useApp();
@@ -9,7 +10,7 @@ export function Screen02Onboarding() {
       {/* Top Burger Photo */}
       <div className="relative w-full h-[55vh] max-h-[480px] overflow-hidden flex items-center justify-center">
         <img
-          src="/assets/images/burger_onboarding.png"
+          src={pub('assets/images/burger_onboarding.png')}
           alt="Hambúrguer Artesanal"
           className="w-full h-full object-cover object-center"
         />

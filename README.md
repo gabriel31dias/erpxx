@@ -17,7 +17,7 @@ npm run dev               # http://localhost:3001
 npm run cert && npm run dev:https   # https na rede local (necessário p/ o PDV offline)
 ```
 
-Cardápio digital (app do cliente, em `cardapio/`): `cd cardapio && npm install && npm run dev` → http://localhost:3333/<slug>.
+Cardápio digital (app do cliente, em `cardapio/`): `cd cardapio && npm install && npm run dev` → http://localhost:3333/cardapio/<slug>. Em produção o ERP serve o build em `/cardapio/<slug>` e `/garcom` (ver `cardapio/SERVIDOR.md`).
 
 Produção: `npm run build && npm start`. Banco: PostgreSQL (`DATABASE_URL` no `.env`).
 

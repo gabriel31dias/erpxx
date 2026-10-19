@@ -17,7 +17,7 @@ function chave(label, checked, { help, disabled } = {}) {
 }
 
 /** campo de imagem: prévia + enviar + remover; grava na hora (`campo` = chave em settings) */
-function imagem(label, campo, url, { help } = {}) {
+function imagem(label, campo, url, { help, onChange } = {}) {
   let atual = url || '';
   const previa = h('img', { alt: label, style: 'max-height:80px;max-width:100%;border-radius:6px' });
   const vazio = h('span', { class: 'txt-secondary f-12' }, 'Sem imagem');
@@ -27,6 +27,7 @@ function imagem(label, campo, url, { help } = {}) {
     await patch('/menu/settings', { [campo]: nova });
     atual = nova;
     mostrar();
+    onChange?.(nova);
     toast(nova ? `${label} salvo.` : `${label} removido.`);
   };
   const remover = h('button', {
@@ -55,6 +56,95 @@ function imagem(label, campo, url, { help } = {}) {
   };
 }
 
+const LOGO_MIN = 20;
+const LOGO_MAX = 120;
+
+/**
+ * Tamanho do logo: controle deslizante + prévia do topo do app (na cor de fundo, como no celular).
+ * Na prévia dá para arrastar o canto do logo. `update` redesenha quando logo, nome ou slogan mudam.
+ */
+function tamanhoLogo(inicial) {
+  let altura = Math.min(LOGO_MAX, Math.max(LOGO_MIN, Number(inicial) || 32));
+  const faixa = h('input', { type: 'range', class: 'form-range', min: LOGO_MIN, max: LOGO_MAX, step: 1, value: altura, 'aria-label': 'Altura do logo' });
+  const valor = h('span', { class: 'badge bg-light text-dark f-12' });
+
+  const logo = h('img', { alt: '', draggable: 'false', style: 'display:block;width:auto;max-width:220px;object-fit:contain;user-select:none' });
+  const semLogo = h('div', { style: 'width:24px;height:24px;border-radius:50%' });
+  const alca = h('span', {
+    title: 'Arraste para mudar o tamanho',
+    style: 'position:absolute;right:-7px;bottom:-7px;width:14px;height:14px;border-radius:50%;background:#fff;'
+      + 'border:2px solid var(--theme-default,#363afe);cursor:nwse-resize;touch-action:none',
+  });
+  const moldura = h('div', { style: 'position:relative;outline:1px dashed;outline-offset:3px' }, logo, alca);
+  const nome = h('div', { style: 'font-size:17px;font-weight:900;letter-spacing:.05em;text-transform:uppercase;line-height:1;margin-top:2px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' });
+  const slogan = h('div', { style: 'font-size:7.5px;font-weight:800;letter-spacing:.22em;text-transform:uppercase;opacity:.8;line-height:1;margin-top:4px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' });
+  const pilula = h('div', { style: 'background:#1A1A1E;border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:6px 12px;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;gap:6px;flex:0 0 auto' },
+    h('span', { style: 'width:8px;height:8px;border-radius:50%;background:#34d399' }), 'Aberto');
+  const topo = h('div', { style: 'background:#000;border-radius:12px;padding:14px 16px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;max-width:390px;min-height:64px' },
+    h('div', { style: 'font-size:22px;line-height:1;width:36px' }, '☰'),
+    h('div', { style: 'display:flex;flex-direction:column;align-items:center;min-width:0;padding:0 8px' }, moldura, semLogo, nome, slogan),
+    pilula);
+
+  const pintar = () => {
+    faixa.value = altura;
+    valor.textContent = `${altura}px`;
+    logo.style.height = `${altura}px`;
+  };
+  faixa.oninput = () => { altura = Number(faixa.value); pintar(); };
+
+  // arrastar a alça: para baixo/direita aumenta
+  alca.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    alca.setPointerCapture(e.pointerId);
+    const y0 = e.clientY;
+    const x0 = e.clientX;
+    const a0 = altura;
+    const mover = (ev) => {
+      const delta = Math.max(ev.clientY - y0, (ev.clientX - x0) / 2);
+      altura = Math.round(Math.min(LOGO_MAX, Math.max(LOGO_MIN, a0 + delta)));
+      pintar();
+    };
+    const soltar = () => { alca.removeEventListener('pointermove', mover); alca.removeEventListener('pointerup', soltar); alca.removeEventListener('pointercancel', soltar); };
+    alca.addEventListener('pointermove', mover);
+    alca.addEventListener('pointerup', soltar);
+    alca.addEventListener('pointercancel', soltar);
+  });
+
+  const menu = topo.firstChild;
+  const update = ({ logoUrl, name, showName, subtitle, showSubtitle, color, background }) => {
+    // mesma regra do app (cardapio/src/lib/api.js onColor): texto escuro em fundo claro
+    const n = parseInt(background.slice(1), 16);
+    const claro = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255 > 0.6;
+    const texto = claro ? '#111111' : '#ffffff';
+    topo.style.background = background;
+    menu.style.color = texto;
+    nome.style.color = texto;
+    slogan.style.color = texto;
+    moldura.style.outlineColor = claro ? 'rgba(0,0,0,.35)' : 'rgba(255,255,255,.35)';
+    logo.src = logoUrl || '';
+    moldura.style.display = logoUrl ? '' : 'none';
+    semLogo.style.display = logoUrl ? 'none' : '';
+    semLogo.style.background = color;
+    nome.textContent = name;
+    nome.style.display = showName ? '' : 'none';
+    slogan.textContent = subtitle;
+    slogan.style.display = showSubtitle && subtitle ? '' : 'none';
+  };
+  pintar();
+
+  return {
+    value: () => altura,
+    update,
+    node: h('div', { class: 'col-12' },
+      h('div', { class: 'd-flex align-items-center justify-content-between' },
+        h('label', { class: 'form-label mb-0' }, 'Tamanho do logo'), valor),
+      h('div', { class: 'd-flex align-items-center gap-2 mb-2', style: 'max-width:390px' },
+        h('span', { class: 'f-12 text-muted' }, 'A'), faixa, h('span', { class: 'f-18 text-muted' }, 'A')),
+      topo,
+      h('div', { class: 'form-text' }, 'Prévia do topo do cardápio no celular. Arraste a barra ou o canto do logo; vale ao clicar em Salvar.')),
+  };
+}
+
 export default async function render({ content, can }) {
   const s = await get('/menu/settings');
   const editavel = can('cardapio.gerenciar');
@@ -80,12 +170,22 @@ export default async function render({ content, can }) {
     description: textarea({ value: s.description, maxlength: 1000 }),
     instagram: input({ value: s.instagram, placeholder: '@sualoja' }),
     primaryColor: input({ type: 'color', value: s.primaryColor, style: 'height:38px' }),
-    logoSize: input({ type: 'number', min: 20, max: 120, value: s.logoSize }),
+    backgroundColor: input({ type: 'color', value: s.backgroundColor, style: 'height:38px' }),
     tables: input({ type: 'number', min: 0, max: 500, value: s.tables }),
     serviceFeePercent: input({ type: 'number', min: 0, max: 30, value: s.serviceFeePercent }),
   };
+  const logoSize = tamanhoLogo(s.logoSize);
+  const previa = () => logoSize.update({
+    logoUrl: img.logo.value() || s.companyLogo,
+    name: s.companyName,
+    showName: c.showName.el.checked,
+    subtitle: f.subtitle.value.trim(),
+    showSubtitle: c.showSubtitle.el.checked,
+    color: f.primaryColor.value,
+    background: f.backgroundColor.value,
+  });
   const img = {
-    logo: imagem('Logo', 'logoUrl', s.logoUrl, { help: 'Vazio usa o logo da empresa.' }),
+    logo: imagem('Logo', 'logoUrl', s.logoUrl, { help: 'Vazio usa o logo da empresa.', onChange: () => previa() }),
     banner: imagem('Banner', 'bannerUrl', s.bannerUrl),
     cover: imagem('Foto de capa', 'coverUrl', s.coverUrl),
   };
@@ -107,11 +207,16 @@ export default async function render({ content, can }) {
     field('Slogan', f.subtitle, { col: 'col-12 col-md-6' }),
     field('Instagram', f.instagram, { col: 'col-6 col-md-3' }),
     field('Cor principal', f.primaryColor, { col: 'col-6 col-md-3' }),
+    field('Cor de fundo', f.backgroundColor, { col: 'col-6 col-md-3', help: 'Abertura e topo do cardápio, atrás do logo.' }),
     field('Sobre a loja', f.description, { col: 'col-12' }),
     img.logo.node, img.banner.node, img.cover.node,
-    field('Altura do logo (px)', f.logoSize, { col: 'col-6 col-md-3' }),
     c.showName.node, c.showSubtitle.node,
+    logoSize.node,
     h('div', { class: 'col-12 d-flex gap-2 justify-content-end' }, editavel ? salvar : null));
+
+  previa();
+  for (const el of [c.showName.el, c.showSubtitle.el, f.subtitle, f.primaryColor, f.backgroundColor]) el.addEventListener('input', previa);
+  for (const el of [c.showName.el, c.showSubtitle.el]) el.addEventListener('change', previa);
 
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -126,7 +231,8 @@ export default async function render({ content, can }) {
         description: f.description.value.trim(),
         instagram: f.instagram.value.trim(),
         primaryColor: f.primaryColor.value,
-        logoSize: Number(f.logoSize.value) || 32,
+        backgroundColor: f.backgroundColor.value,
+        logoSize: logoSize.value(),
         tables: Math.max(0, Number(f.tables.value) || 0),
         serviceFeePercent: Math.min(30, Math.max(0, Number(f.serviceFeePercent.value) || 0)),
         logoUrl: img.logo.value(),

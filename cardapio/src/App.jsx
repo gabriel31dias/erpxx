@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { CheckCircle2 } from 'lucide-react';
 import { useApp } from './context/AppContext';
+import { SplashLoader } from './components/SplashLoader';
+import { onColor } from './lib/api';
 import { Screen01Splash } from './screens/Screen01Splash';
 import { Screen02Onboarding } from './screens/Screen02Onboarding';
 import { Screen03Home } from './screens/Screen03Home';
@@ -23,6 +25,7 @@ import { ScreenPix } from './screens/ScreenPix';
 
 export function App() {
   const { currentScreen, menu, slug } = useApp();
+  const [ready, setReady] = useState(false); // abertura (logo + barra) até as fotos carregarem
 
   const renderCurrentScreen = () => {
     switch (currentScreen) {
@@ -67,24 +70,20 @@ export function App() {
     }
   };
 
-  if (menu.loading || menu.error) {
+  if (menu.error) {
     return (
       <div className="w-full min-h-screen bg-black text-white flex flex-col items-center justify-center gap-3 px-8 text-center font-['Plus_Jakarta_Sans',sans-serif]">
-        {menu.loading ? (
-          <div className="w-10 h-10 rounded-full border-4 border-white/20 border-t-white animate-spin" />
-        ) : (
-          <>
-            <h1 className="text-xl font-black">{menu.error}</h1>
-            <p className="text-sm text-zinc-400">
-              {slug
-                ? <>Não existe loja com o link <b className="text-white">/{slug}</b>. Confira o link no painel (Minha loja).</>
-                : <>Abra o link da loja, por exemplo <b className="text-white">/don-beef</b>.</>}
-            </p>
-          </>
-        )}
+        <h1 className="text-xl font-black">{menu.error}</h1>
+        <p className="text-sm text-zinc-400">
+          {slug
+            ? <>Não existe loja com o link <b className="text-white">/{slug}</b>. Confira o link no painel (Minha loja).</>
+            : <>Abra o link da loja, por exemplo <b className="text-white">/don-beef</b>.</>}
+        </p>
       </div>
     );
   }
+
+  if (!ready) return <SplashLoader store={menu.store} products={menu.products} onDone={() => setReady(true)} />;
 
   return <AppFrame>{renderCurrentScreen()}</AppFrame>;
 }
@@ -94,8 +93,8 @@ export function AppFrame({ children }) {
   const { currentScreen, menu, toast } = useApp();
   return (
     <div
-      style={{ '--brand': menu.store.primary_color }}
-      className="w-full min-h-screen bg-[#000000] text-white flex justify-center items-stretch font-['Plus_Jakarta_Sans',sans-serif] antialiased">
+      style={{ '--brand': menu.store.primary_color, '--bg': menu.store.background_color, '--on-bg': onColor(menu.store.background_color) }}
+      className="w-full min-h-screen bg-[var(--bg,#000)] text-white flex justify-center items-stretch font-['Plus_Jakarta_Sans',sans-serif] antialiased">
       {/* REAL END-USER APP: 100% full screen on mobile, cleanly centered on desktop, ZERO emulators */}
       <main className="w-full max-w-[440px] min-h-screen bg-[#0E0E10] flex flex-col justify-between shadow-2xl relative overflow-hidden">
         {/* key remounts per screen so the CSS entrance animation replays on every navigation */}

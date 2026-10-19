@@ -151,6 +151,7 @@ export const DEFAULT_MENU = {
   bannerUrl: null as string | null,
   coverUrl: null as string | null,
   primaryColor: '#FF002E',
+  backgroundColor: '#000000', // abertura e topo da home, atrás do logo
   instagram: '',
   hours: '18:00 às 23:00',
   deliveryTime: '30 - 50 min',
@@ -182,6 +183,7 @@ const toApiStore = (c: Company, m: MenuSettings) => ({
   banner_url: m.bannerUrl,
   cover_url: m.coverUrl,
   primary_color: m.primaryColor,
+  background_color: m.backgroundColor,
   whatsapp: waPhone(c.whatsapp) ?? '',
   phone: c.phone ?? '',
   address: [c.address, c.number, c.district, c.city].filter(Boolean).join(', '),
@@ -319,7 +321,7 @@ function insertOrder(db: Db, companyId: string, data: Omit<Prisma.MenuOrderUnche
 
 // ---------- tempo real: avisa a tela de pedidos ----------
 
-type MenuEvent = { companyId: string; type: 'new' | 'update'; id: string; number: number; customerName: string; status: string };
+type MenuEvent = { companyId: string; type: 'new' | 'update'; id: string; number: number; customerName: string; status: string; table: number | null };
 
 /**
  * Canal de eventos dos pedidos por empresa, entregue à tela por SSE (`GET /api/menu/events`).
@@ -331,7 +333,7 @@ export class MenuEvents {
   private readonly bus = new Subject<MenuEvent>();
 
   emit(type: MenuEvent['type'], o: MenuOrder) {
-    this.bus.next({ companyId: o.companyId, type, id: o.id, number: o.number, customerName: o.customerName, status: o.status });
+    this.bus.next({ companyId: o.companyId, type, id: o.id, number: o.number, customerName: o.customerName, status: o.status, table: o.table });
   }
 
   stream(companyId: string): Observable<MessageEvent> {
@@ -510,6 +512,7 @@ class MenuSettingsDto {
   @IsOptional() @urlField() bannerUrl?: string;
   @IsOptional() @urlField() coverUrl?: string;
   @IsOptional() @Matches(/^#[0-9a-fA-F]{6}$/, { message: 'Cor inválida' }) primaryColor?: string;
+  @IsOptional() @Matches(/^#[0-9a-fA-F]{6}$/, { message: 'Cor inválida' }) backgroundColor?: string;
   @IsOptional() @IsString() @MaxLength(60) instagram?: string;
   @IsOptional() @IsString() @MaxLength(60) hours?: string;
   @IsOptional() @IsString() @MaxLength(30) deliveryTime?: string;
@@ -591,7 +594,10 @@ export class MenuController {
   async settings(@CurrentUser() u: SessionUser) {
     const c = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
     const base = process.env.MENU_URL?.replace(/\/$/, '');
-    return { slug: c.slug, menuUrl: base ? `${base}/${c.slug}` : null, pixReady: c.pixEnabled && !!c.pixSecretKey, ...menuOf(c) };
+    return {
+      slug: c.slug, menuUrl: base ? `${base}/${c.slug}` : null, pixReady: c.pixEnabled && !!c.pixSecretKey, ...menuOf(c),
+      companyName: c.name, companyLogo: c.logoPath, // prévia do topo do cardápio
+    };
   }
 
   /** foto para o cardápio; devolve a URL pública para gravar no produto ou na loja */

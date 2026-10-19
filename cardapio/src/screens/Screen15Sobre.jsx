@@ -1,6 +1,7 @@
 import React from 'react';
 import { ArrowLeft, Share2, Clock, DollarSign, MapPin } from 'lucide-react';
 import { useApp, brl } from '../context/AppContext';
+import { pub } from '../lib/api';
 
 export function Screen15Sobre() {
   const { goBack, storeInfo: s } = useApp();
@@ -26,7 +27,7 @@ export function Screen15Sobre() {
         {/* Top Hero Image with Saboria Logo Overlay */}
         <div className="relative w-full h-52 bg-zinc-900">
           <img
-            src={s.cover_url || s.banner_url || '/assets/images/restaurant_interior.png'}
+            src={s.cover_url || s.banner_url || pub('assets/images/restaurant_interior.png')}
             alt={s.name}
             className="w-full h-full object-cover"
           />

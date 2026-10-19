@@ -8,6 +8,7 @@
  * reenviar não duplica.
  */
 import { get, novaChave, post } from './api.js';
+import { ligarAlarmePedidos } from './pedidos-ao-vivo.js';
 import { estado, pendentes, reenvioAutomatico, sincronizar } from './offline.js';
 import {
   $, centsToInput, confirmAction, fmtBRL, fmtQty, h, modal, moneyToCents, parseQty, toast,
@@ -1072,6 +1073,7 @@ async function boot() {
   state.methods = rows.filter((m) => m.active && (crediario || m.type !== 'crediario'));
 
   document.addEventListener('keydown', atalhos);
+  ligarAlarmePedidos((perm) => state.me.permissions.includes(perm));
   window.addEventListener('online', async () => {
     const { enviados } = await sincronizar();
     if (enviados) toast(`${enviados} venda(s) enviada(s) ao servidor.`);

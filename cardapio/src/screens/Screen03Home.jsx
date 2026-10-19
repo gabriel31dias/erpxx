@@ -23,19 +23,19 @@ export function Screen03Home() {
   };
 
   return (
-    <div className="relative w-full h-full min-h-screen bg-black overflow-hidden flex flex-col justify-between select-none">
+    <div className="relative w-full h-full min-h-screen bg-[var(--bg,#000)] overflow-hidden flex flex-col justify-between select-none">
       {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto scrollbar-none">
         
         {/* Top Header Bar */}
-        <div className="w-full bg-black px-4 pt-3.5 pb-2 flex items-center justify-between z-20">
+        <div className="w-full bg-[var(--bg,#000)] px-4 pt-3.5 pb-2 flex items-center justify-between z-20">
           {/* Hamburger Menu */}
           <button 
             onClick={() => setMenuOpen(true)}
             aria-label="Abrir menu"
-            className="w-9 h-9 flex items-center justify-start text-white hover:text-zinc-300 transition-colors active:scale-95"
+            className="w-9 h-9 flex items-center justify-start text-[var(--on-bg,#fff)] hover:opacity-70 transition active:scale-95"
           >
-            <Menu size={24} className="text-white stroke-[2.5]" />
+            <Menu size={24} className="stroke-[2.5]" />
           </button>
 
           {/* Center Brand: logo da loja (ou chama) + nome + slogan */}
@@ -53,11 +53,11 @@ export function Screen03Home() {
               </div>
             )}
             {/* nome oculto continua pro leitor de tela */}
-            <h1 className={storeInfo.show_name === false ? 'sr-only' : "text-[17px] font-black tracking-wider text-white uppercase leading-none mt-0.5 font-['Plus_Jakarta_Sans',sans-serif] truncate max-w-[200px]"}>
+            <h1 className={storeInfo.show_name === false ? 'sr-only' : "text-[17px] font-black tracking-wider text-[var(--on-bg,#fff)] uppercase leading-none mt-0.5 font-['Plus_Jakarta_Sans',sans-serif] truncate max-w-[200px]"}>
               {storeInfo.name}
             </h1>
             {storeInfo.subtitle && storeInfo.show_subtitle !== false && (
-              <span className="text-[7.5px] font-extrabold tracking-[0.22em] text-white/80 uppercase leading-none mt-1 truncate max-w-[200px]">
+              <span className="text-[7.5px] font-extrabold tracking-[0.22em] text-[var(--on-bg,#fff)] opacity-80 uppercase leading-none mt-1 truncate max-w-[200px]">
                 {storeInfo.subtitle}
               </span>
             )}
@@ -75,7 +75,7 @@ export function Screen03Home() {
 
         {/* Hero Banner da loja */}
         {storeInfo.banner_url ? (
-          <div className="relative w-full overflow-hidden bg-black flex items-center justify-center -mt-0.5 pb-2">
+          <div className="relative w-full overflow-hidden bg-[var(--bg,#000)] flex items-center justify-center -mt-0.5 pb-2">
             <img
               src={storeInfo.banner_url}
               alt={storeInfo.name}

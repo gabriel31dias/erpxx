@@ -3,6 +3,7 @@
 import { get, post } from './api.js';
 import { estado, pendentes, reenvioAutomatico, sincronizar } from './offline.js';
 import { $, debounce, emptyState, fmtBRL, h, icon, modal, refreshIcons, toast } from './ui.js';
+import { ligarAlarmePedidos } from './pedidos-ao-vivo.js';
 
 export const ctx = { me: null, can: () => false, branchId: '' };
 
@@ -295,6 +296,7 @@ export async function boot() {
   montarInstalar();
   loadNotifications();
   setInterval(loadNotifications, 120000);
+  ligarAlarmePedidos(ctx.can);
 
   try {
     const mod = await import(`./pages/${page}.js`);
