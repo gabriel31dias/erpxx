@@ -29,7 +29,9 @@ export function DeliveryMap({ store, me, stops, path, className = '' }) {
 
   useEffect(() => {
     map.current = L.map(el.current, { zoomControl: false, attributionControl: true }).setView([-23.5505, -46.6333], 13);
-    L.tileLayer(TILES, { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map.current);
+    // o OSM bloqueia tile sem Referer ("Access blocked") e o servidor manda Referrer-Policy same-origin:
+    // o tile libera só a origem do site (sem caminho nem query), como no mapa do ERP (public/js/mapa.js)
+    L.tileLayer(TILES, { maxZoom: 19, attribution: '&copy; OpenStreetMap', referrerPolicy: 'strict-origin-when-cross-origin' }).addTo(map.current);
     layers.current = L.layerGroup().addTo(map.current);
     setTimeout(() => map.current?.invalidateSize(), 150);
     return () => {
