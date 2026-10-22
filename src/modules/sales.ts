@@ -87,6 +87,22 @@ export class PaymentStatusDto {
   @IsOptional() @IsISO8601({ strict: true }, { message: 'paidAt deve ser uma data ISO 8601.' }) paidAt?: string;
 }
 
+/** Leitura do ingresso na entrada (modo bilheteria). */
+export class TicketRedeemDto {
+  @IsOptional() @IsString() @MaxLength(64) @Matches(TERMINAL_ID, { message: 'terminalId inválido.' }) terminalId?: string;
+}
+
+class StockCheckItemDto {
+  @IsString() productId!: string;
+  @IsNumber() @Min(0.001) quantity!: number;
+}
+
+/** Itens do carrinho da maquininha a conferir antes de cobrar. */
+export class StockCheckDto {
+  @IsOptional() @IsString() branchId?: string;
+  @IsArray() @ValidateNested({ each: true }) @Type(() => StockCheckItemDto) items!: StockCheckItemDto[];
+}
+
 class CancelDto {
   @IsString() @MinLength(3) reason!: string;
   @IsOptional() @IsString() idempotencyKey?: string;
@@ -457,6 +473,103 @@ export class SalesService {
     return { items, subtotal, discountTotal, total, pct, priceListId: priceList?.id ?? null, offlinePrices };
   }
 
+  /**
+   * Confere se o carrinho ainda cabe no estoque da filial agora (outra maquininha pode
+   * ter vendido a última unidade). Não reserva nada: na finalização o estoque é
+   * conferido de novo e quem chegar depois recebe 409.
+   */
+  async checkStock(a: SaleActor, dto: StockCheckDto) {
+    if (!dto.items?.length) throw new BadRequestException('Informe ao menos um item.');
+    const branchId = await this.branches.require(a as unknown as SessionUser, dto.branchId);
+    const settings = await this.settings.of(a.companyId);
+    // o mesmo produto em duas linhas do carrinho soma
+    const wanted = new Map<string, number>();
+    for (const i of dto.items) wanted.set(i.productId, roundQty((wanted.get(i.productId) ?? 0) + i.quantity));
+    const ids = [...wanted.keys()];
+    const [products, stocks] = await Promise.all([
+      this.db.product.findMany({
+        where: { companyId: a.companyId, deletedAt: null, id: { in: ids } },
+        select: { id: true, name: true, unit: true, active: true },
+      }),
+      this.db.stock.findMany({ where: { companyId: a.companyId, branchId, productId: { in: ids } } }),
+    ]);
+    const byId = new Map(products.map((p) => [p.id, p]));
+    const qtyBy = new Map(stocks.map((s) => [s.productId, s.quantity]));
+    const items = ids.map((productId) => {
+      const product = byId.get(productId);
+      const requested = wanted.get(productId)!;
+      if (!product) return { productId, name: null, unit: null, requested, available: null, ok: false, reason: 'not_found' };
+      const available = qtyBy.get(productId) ?? 0;
+      const reason = !product.active ? 'inactive'
+        : settings.stockControl && !settings.allowNegativeStock && available < requested ? 'insufficient' : null;
+      return { productId, name: product.name, unit: product.unit, requested, available, ok: !reason, reason };
+    });
+    return { ok: items.every((i) => i.ok), branchId, stockControl: settings.stockControl, items };
+  }
+
+  /**
+   * Situação do ingresso (a venda): valid | redeemed | cancelled | payment_pending | payment_declined.
+   * Venda da maquininha esperando o SiTef ainda não vale como ingresso.
+   */
+  ticketState(sale: { status: string; paymentStatus: string; ticketRedeemedAt: Date | null }) {
+    if (sale.status !== 'COMPLETED') return 'cancelled';
+    if (sale.ticketRedeemedAt) return 'redeemed';
+    if (sale.paymentStatus === 'pending') return 'payment_pending';
+    if (sale.paymentStatus === 'declined') return 'payment_declined';
+    return 'valid';
+  }
+
+  async ticket(companyId: string, saleId: string) {
+    const settings = await this.settings.of(companyId);
+    if (!settings.ticketMode) throw new ForbiddenException('O modo bilheteria está desligado nas configurações.');
+    const sale = await this.db.sale.findFirst({
+      where: { id: saleId, companyId },
+      include: {
+        items: {
+          select: {
+            name: true, quantity: true, unit: true,
+            product: { select: { eventName: true, eventDate: true, ticketType: true, ticketBox: true, boxNumber: true, tableNumber: true } },
+          },
+        },
+        customer: { select: { name: true } },
+      },
+    });
+    if (!sale) throw new NotFoundException('Ingresso não encontrado.');
+    // dados do evento vêm do cadastro do produto, achatados no item
+    const items = sale.items.map(({ product, ...it }) => ({ ...it, ...product }));
+    const by = sale.ticketRedeemedById
+      ? await this.db.user.findUnique({ where: { id: sale.ticketRedeemedById }, select: { name: true } }) : null;
+    return {
+      id: sale.id, number: sale.number, state: this.ticketState(sale), soldAt: sale.soldAt,
+      totalCents: sale.totalCents, customer: sale.customer?.name ?? null, items,
+      redeemedAt: sale.ticketRedeemedAt, redeemedBy: by?.name ?? null, redeemedTerminal: sale.ticketRedeemedTerminal,
+    };
+  }
+
+  /** Queima o ingresso: só uma leitura passa, mesmo com duas maquininhas lendo o mesmo QR ao mesmo tempo. */
+  async redeemTicket(a: SaleActor, saleId: string, dto: TicketRedeemDto, ip?: string) {
+    const before = await this.ticket(a.companyId, saleId);
+    if (before.state === 'valid') {
+      const burned = await this.db.sale.updateMany({
+        where: { id: saleId, companyId: a.companyId, status: 'COMPLETED', ticketRedeemedAt: null },
+        data: { ticketRedeemedAt: new Date(), ticketRedeemedById: a.userId, ticketRedeemedTerminal: dto.terminalId?.trim() || null },
+      });
+      if (burned.count === 1) {
+        await this.audit.log({ sub: a.userId ?? undefined, companyId: a.companyId }, 'ticket_redeem', 'Sale', saleId,
+          { numero: before.number, maquininha: dto.terminalId ?? null }, ip);
+        return { redeemed: true, ticket: await this.ticket(a.companyId, saleId) };
+      }
+    }
+    const ticket = before.state === 'valid' ? await this.ticket(a.companyId, saleId) : before; // perdeu a corrida
+    const why: Record<string, string> = {
+      redeemed: `Ingresso #${ticket.number} já foi usado.`,
+      cancelled: `A venda #${ticket.number} foi cancelada: ingresso inválido.`,
+      payment_pending: `O pagamento da venda #${ticket.number} ainda não foi aprovado.`,
+      payment_declined: `O pagamento da venda #${ticket.number} foi recusado.`,
+    };
+    throw new ConflictException({ statusCode: 409, message: why[ticket.state], reason: ticket.state, ticket });
+  }
+
   /** A origem do preço mudou no mesmo minuto da venda ou depois? (horário local da empresa) */
   private async priceChangedAfter(companyId: string, productId: string, customerId: string | undefined, at: string) {
     const changed = await this.pricing.lastChange(companyId, productId, customerId);
@@ -657,6 +770,34 @@ export class SalesController {
     };
   }
 
+  /** A maquininha pergunta o que está ligado na loja e os dados para o comprovante (nome, logo). */
+  @Get('terminal-config') @Perms('pdv.acessar')
+  async terminalConfig(@CurrentUser() u: SessionUser, @Req() req: Request) {
+    const [settings, c] = await Promise.all([
+      this.settings.of(u.companyId),
+      this.db.company.findUniqueOrThrow({ where: { id: u.companyId } }),
+    ]);
+    // sem logo cadastrado, o comprovante sai com o da Blue
+    const logoPath = c.logoPath || '/icons/brand.png';
+    // logo enviado pelo ERP é caminho relativo: a maquininha precisa da URL inteira
+    const logoUrl = /^https?:\/\//.test(logoPath) ? logoPath : `${req.protocol}://${req.get('host')}${logoPath}`;
+    return {
+      ticketMode: settings.ticketMode,
+      cloverFeePct: settings.cloverFeePct,
+      store: {
+        name: c.tradeName || c.name, legalName: c.name, document: c.document, phone: c.phone,
+        address: [c.address, c.number, c.district, c.city, c.state].filter(Boolean).join(', '),
+        logoUrl, receiptFooter: settings.receiptFooter,
+      },
+    };
+  }
+
+  /** Consulta o ingresso sem queimar (modo bilheteria). */
+  @Get(':id/ticket') @Perms('pdv.acessar')
+  ticket(@CurrentUser() u: SessionUser, @Param('id') id: string) {
+    return this.sales.ticket(u.companyId, id);
+  }
+
   @Get(':id')
   async detail(@CurrentUser() u: SessionUser, @Param('id') id: string) {
     const sale = await this.db.sale.findFirst({
@@ -679,6 +820,14 @@ export class SalesController {
         footer: settings.receiptFooter,
       },
     };
+  }
+
+  /** A maquininha confere o estoque do carrinho antes de cobrar no SiTef. */
+  @Post('stock-check') @Perms('pdv.acessar') @HttpCode(200)
+  stockCheck(@CurrentUser() u: SessionUser, @Body() dto: StockCheckDto) {
+    return this.sales.checkStock({
+      companyId: u.companyId, branchId: u.branchId, role: u.role, userId: u.sub, sellerId: null,
+    }, dto);
   }
 
   // ---------- venda ----------
@@ -709,6 +858,14 @@ export class SalesController {
     }, found.id, dto, req.ip, req.headers['user-agent']);
     const sale = await this.db.sale.findUniqueOrThrow({ where: { id: found.id }, include: this.include });
     return { changed, settledEntries: settled, sale: this.withPayment(sale) };
+  }
+
+  /** Queima o ingresso na entrada: 200 na primeira leitura, 409 com o motivo nas outras. */
+  @Post(':id/ticket/redeem') @Perms('pdv.acessar') @HttpCode(200)
+  redeemTicket(@CurrentUser() u: SessionUser, @Param('id') id: string, @Body() dto: TicketRedeemDto, @Req() req: Request) {
+    return this.sales.redeemTicket({
+      companyId: u.companyId, branchId: u.branchId, role: u.role, userId: u.sub, sellerId: null,
+    }, id, dto, req.ip);
   }
 
   /** Cancelamento nunca apaga: muda status, estorna estoque e registra tudo. */

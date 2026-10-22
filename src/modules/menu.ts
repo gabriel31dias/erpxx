@@ -4,12 +4,13 @@
  * então o app só troca o endereço da API.
  */
 import {
-  BadRequestException, Body, Controller, ForbiddenException, Get, Header, HttpCode, Inject, Injectable, Logger, MessageEvent, Module,
-  NotFoundException, Param, Patch, Post, Query, Req, Sse, UploadedFile, UseInterceptors,
+  BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, Header, HttpCode, Inject, Injectable, Logger, MessageEvent, Module,
+  NotFoundException, Param, Patch, Post, Query, Req, Res, Sse, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
 import { Observable, Subject, filter, interval, map, merge } from 'rxjs';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { randomBytes } from 'crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
+import * as QRCode from 'qrcode';
 import { mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { Throttle } from '@nestjs/throttler';
@@ -19,8 +20,11 @@ import {
   MaxLength, Min, MinLength, ValidateIf, ValidateNested,
 } from 'class-validator';
 import type { MenuOrder, Company, Prisma } from '@prisma/client';
-import type { Request } from 'express';
-import { PRISMA, Db } from '../common/prisma.service';
+import type { Request, Response } from 'express';
+import { PRISMA, Db, Tx } from '../common/prisma.service';
+import {
+  backfillTickets, ensureDefaultStation, pruneTickets, routeItems, stationOf, syncOrder, ticketsFollow, ticketsFor,
+} from './kitchen';
 import { CurrentUser, Perms, Public, SessionUser, SkipCsrf } from '../common/auth.guard';
 import { AuditService, PlanService } from '../common/core';
 import { DATE_RE, paging, today, waPhone } from '../common/util';
@@ -40,6 +44,17 @@ const IMAGE_TYPES: Array<{ ext: string; match: (b: Buffer) => boolean }> = [
   { ext: 'webp', match: (b) => b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP' },
 ];
 
+/** Grava a imagem (tipo pelo conteúdo, não pelo nome) na pasta pública da empresa e devolve a URL. */
+export async function saveCompanyImage(companyId: string, file?: UploadFile) {
+  if (!file?.buffer?.length) throw new BadRequestException('Envie a imagem no campo "file".');
+  const type = IMAGE_TYPES.find((t) => t.match(file.buffer));
+  if (!type) throw new BadRequestException('Formato não aceito. Envie JPG, PNG ou WEBP de até 3 MB.');
+  const name = `${randomBytes(12).toString('hex')}.${type.ext}`;
+  await mkdir(join(MENU_IMAGES_DIR, companyId), { recursive: true });
+  await writeFile(join(MENU_IMAGES_DIR, companyId, name), file.buffer);
+  return `/uploads/menu/${companyId}/${name}`;
+}
+
 // ---------- preço ----------
 
 type Priced = { name: string; priceCents: number };
@@ -48,6 +63,8 @@ export type MenuOptions = { additionals: Priced[]; sizes: Priced[]; optionGroups
 export type OrderItem = {
   productId: string; name: string; quantity: number; unitCents: number;
   additionals: Priced[]; totalCents: number;
+  /** praça da cozinha gravada quando o pedido entra; null = não vai para a cozinha (ausente = pedido antigo) */
+  stationId?: string | null;
 };
 export type CartLine = {
   product_id: string;
@@ -310,18 +327,30 @@ async function priceFromDb(db: Db, companyId: string, lines: CartLine[], deliver
   }
 }
 
-/** número sequencial por empresa: trava a linha da empresa até o commit (mesmo esquema da venda) */
-function insertOrder(db: Db, companyId: string, data: Omit<Prisma.MenuOrderUncheckedCreateInput, 'companyId' | 'number'>) {
+/**
+ * Número sequencial por empresa: trava a linha da empresa até o commit (mesmo esquema da venda).
+ * Cada item ganha a praça da cozinha e cada praça com item ganha a sua ficha.
+ */
+async function insertOrder(db: Db, companyId: string, data: Omit<Prisma.MenuOrderUncheckedCreateInput, 'companyId' | 'number'>) {
+  const cozinha = await ensureDefaultStation(db, companyId);
   return db.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Company" WHERE id = ${companyId} FOR UPDATE`;
     const last = await tx.menuOrder.aggregate({ where: { companyId }, _max: { number: true } });
-    return tx.menuOrder.create({ data: { ...data, companyId, number: (last._max.number ?? 0) + 1 } });
+    const items = await routeItems(tx as Tx, companyId, cozinha.id, JSON.parse(data.items as string));
+    return tx.menuOrder.create({
+      data: {
+        ...data, items: JSON.stringify(items), companyId, number: (last._max.number ?? 0) + 1,
+        tickets: { createMany: { data: ticketsFor(companyId, items) } },
+      },
+    });
   });
 }
 
 // ---------- tempo real: avisa a tela de pedidos ----------
 
-type MenuEvent = { companyId: string; type: 'new' | 'update'; id: string; number: number; customerName: string; status: string; table: number | null };
+type MenuEvent = { companyId: string; type: 'new' | 'update' | 'call'; id: string; number: number; customerName: string; status: string; table: number | null };
+/** chamado da mesa: waiter = chamar o garçom, bill = pedir a conta */
+export type CallKind = 'waiter' | 'bill';
 
 /**
  * Canal de eventos dos pedidos por empresa, entregue à tela por SSE (`GET /api/menu/events`).
@@ -336,9 +365,18 @@ export class MenuEvents {
     this.bus.next({ companyId: o.companyId, type, id: o.id, number: o.number, customerName: o.customerName, status: o.status, table: o.table });
   }
 
-  stream(companyId: string): Observable<MessageEvent> {
+  /** chamado da mesa aberto (status = kind) ou atendido (status = attended) */
+  call(companyId: string, table: number, id: string, status: CallKind | 'attended') {
+    this.bus.next({ companyId, type: 'call', id, number: 0, customerName: `Mesa ${table}`, status, table });
+  }
+
+  /** `calls: false`: a cozinha não recebe chamado de mesa */
+  stream(companyId: string, { calls = true } = {}): Observable<MessageEvent> {
     return merge(
-      this.bus.pipe(filter((e) => e.companyId === companyId), map(({ companyId: _, ...data }) => ({ data }))),
+      this.bus.pipe(
+        filter((e) => e.companyId === companyId && (calls || e.type !== 'call')),
+        map(({ companyId: _, ...data }) => ({ data })),
+      ),
       // comentário a cada 25s: proxy e navegador não derrubam a conexão parada
       interval(25_000).pipe(map(() => ({ type: 'ping', data: '' }))),
     );
@@ -373,6 +411,19 @@ class CreateOrderDto {
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(50) @ValidateNested({ each: true }) @Type(() => LineDto) items!: LineDto[];
 }
 
+class DineInOrderDto {
+  /** código do QR da mesa */
+  @IsString() @MaxLength(64) t!: string;
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(50) @ValidateNested({ each: true }) @Type(() => LineDto) items!: LineDto[];
+  @IsOptional() @IsString() @MaxLength(300) notes?: string;
+}
+
+class TableCallDto {
+  /** código do QR da mesa */
+  @IsString() @MaxLength(64) t!: string;
+  @IsIn(['waiter', 'bill']) kind!: CallKind;
+}
+
 const REJECTED = ['refused', 'failed', 'canceled', 'cancelled', 'expired', 'chargeback'];
 
 @Controller('api/public')
@@ -396,6 +447,52 @@ export class PublicMenuController {
   async menu(@Param('slug') slug: string) {
     const { c, m } = await this.company(slug);
     return catalog(this.db, c, m);
+  }
+
+  /** cliente na mesa (QR): mesa existe e o código do QR confere */
+  private async dineIn(slug: string, t: string, code?: string) {
+    const { c, m } = await this.company(slug);
+    const table = tableOf(t, m.tables);
+    if (!tableTokenOk(c.id, table, code)) throw new ForbiddenException('QR Code inválido. Leia de novo o QR da mesa.');
+    return { c, table };
+  }
+
+  /** o que a mesa já pediu (comanda aberta), para o cliente acompanhar */
+  @Get('stores/:slug/tables/:table')
+  async tableTab(@Param('slug') slug: string, @Param('table') t: string, @Query('t') code?: string) {
+    const { c, table } = await this.dineIn(slug, t, code);
+    const rows = await openTableOrders(this.db, c.id, table);
+    const orders = rows.map((o) => ({
+      id: o.id, number: o.number, status: o.status, created_at: o.createdAt, total: o.totalCents / 100,
+      items: (JSON.parse(o.items) as OrderItem[]).map((i) => ({ name: i.name, quantity: i.quantity, total: i.totalCents / 100 })),
+    }));
+    const calls = (await openCalls(this.db, c.id, table)).map((x) => ({ kind: x.kind, created_at: x.createdAt }));
+    return { table, orders, total: rows.reduce((s, o) => s + o.totalCents, 0) / 100, calls };
+  }
+
+  /** cliente chama o garçom ou pede a conta; repetir o mesmo chamado em aberto não duplica */
+  @Post('stores/:slug/tables/:table/calls')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async tableCall(@Param('slug') slug: string, @Param('table') t: string, @Body() b: TableCallDto) {
+    const { c, table } = await this.dineIn(slug, t, b.t);
+    const open = await this.db.tableCall.findFirst({ where: { companyId: c.id, table, kind: b.kind, attendedAt: null } });
+    const call = open ?? await this.db.tableCall.create({ data: { companyId: c.id, table, kind: b.kind } });
+    // repetido também avisa de novo: o cliente insistiu
+    this.events.call(c.id, table, call.id, b.kind);
+    return { kind: call.kind, created_at: call.createdAt };
+  }
+
+  /** pedido do cliente pelo QR: entra na comanda da mesa igual ao do garçom e vai direto para a cozinha */
+  @Post('stores/:slug/tables/:table/orders')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async tableOrder(@Param('slug') slug: string, @Param('table') t: string, @Body() b: DineInOrderDto) {
+    const { c, table } = await this.dineIn(slug, t, b.t);
+    await this.plans.assertActive(c.id);
+    const { order, cart } = await insertTableOrder(this.db, c.id, table, b.items,
+      [(b.notes ?? '').trim(), 'Pedido pelo QR da mesa'].filter(Boolean).join(' · '));
+    this.events.emit('new', order);
+    return { id: order.id, number: order.number, table, status: order.status, total: cart.totalCents / 100 };
   }
 
   @Post('stores/:slug/orders')
@@ -498,7 +595,13 @@ export class PublicMenuController {
 // ---------- backoffice (ERP) ----------
 
 // cancelar tem rota própria (pede motivo): POST orders/:id/cancel
-const STATUSES = ['pending', 'preparing', 'delivering', 'delivered'];
+const STATUSES = ['pending', 'preparing', 'ready', 'delivering', 'delivered'];
+
+/** horário de cada etapa da cozinha: grava na primeira vez que o pedido chega nela */
+const stamps = (o: MenuOrder, status: string) => ({
+  ...(status === 'preparing' && !o.acceptedAt ? { acceptedAt: new Date() } : {}),
+  ...(status === 'ready' && !o.readyAt ? { readyAt: new Date(), ...(o.acceptedAt ? {} : { acceptedAt: new Date() }) } : {}),
+});
 const urlField = () => Matches(/^(\/[\w./-]+|https?:\/\/\S+)?$/, { message: 'URL de imagem inválida' });
 
 class MenuSettingsDto {
@@ -577,6 +680,60 @@ const tableOf = (t: string, max: number) => {
   return n;
 };
 
+/**
+ * Código do QR da mesa: sem ele não dá para mandar pedido para "a mesa 3" de casa, só trocando o número na URL.
+ * Assinado com o segredo do servidor, então não precisa guardar nada no banco.
+ */
+export const tableToken = (companyId: string, table: number) =>
+  createHmac('sha256', process.env.JWT_SECRET || 'lojaflow-dev').update(`mesa:${companyId}:${table}`).digest('base64url').slice(0, 16);
+
+const tableTokenOk = (companyId: string, table: number, t?: string) => {
+  const want = Buffer.from(tableToken(companyId, table));
+  const got = Buffer.from(String(t ?? ''));
+  return got.length === want.length && timingSafeEqual(got, want);
+};
+
+/** endereços públicos do cardápio: MENU_URL aponta para /cardapio; o delivery fica no mesmo domínio em /delivery */
+const menuLinks = (slug: string) => {
+  const base = process.env.MENU_URL?.replace(/\/$/, '');
+  if (!base) return { tableMenuUrl: null, deliveryUrl: null, tableUrl: (_t: number, _code: string) => null as string | null };
+  return {
+    tableMenuUrl: `${base}/${slug}/mesa`,
+    deliveryUrl: `${new URL(base).origin}/delivery/${slug}`,
+    tableUrl: (t: number, code: string) => `${base}/${slug}/mesa/${t}?t=${code}`,
+  };
+};
+
+/** pedido na comanda da mesa (garçom ou cliente pelo QR): preço do servidor, sem entrega, paga ao fechar a conta */
+async function insertTableOrder(db: Db, companyId: string, table: number, lines: CartLine[], notes: string) {
+  const cart = await priceFromDb(db, companyId, lines, 0);
+  const order = await insertOrder(db, companyId, {
+    table,
+    customerName: `Mesa ${table}`,
+    customerPhone: '',
+    deliveryType: 'table',
+    notes,
+    items: JSON.stringify(cart.items),
+    subtotalCents: cart.subtotalCents,
+    deliveryFeeCents: 0,
+    totalCents: cart.totalCents,
+    paymentMethod: 'comanda',
+  });
+  return { order, cart };
+}
+
+/** chamados das mesas que ninguém atendeu ainda */
+const openCalls = (db: Db, companyId: string, table?: number) => db.tableCall.findMany({
+  where: { companyId, attendedAt: null, ...(table != null ? { table } : {}) },
+  orderBy: { createdAt: 'asc' },
+});
+
+/** comanda aberta da mesa: pedidos ainda sem venda */
+const openTableOrders = (db: Db, companyId: string, table?: number) => db.menuOrder.findMany({
+  where: { companyId, table: table ?? { not: null }, saleId: null, status: { not: 'cancelled' } },
+  orderBy: { createdAt: 'asc' },
+});
+
 @Controller('api/menu')
 export class MenuController {
   constructor(
@@ -594,8 +751,9 @@ export class MenuController {
   async settings(@CurrentUser() u: SessionUser) {
     const c = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
     const base = process.env.MENU_URL?.replace(/\/$/, '');
+    const { tableMenuUrl, deliveryUrl } = menuLinks(c.slug);
     return {
-      slug: c.slug, menuUrl: base ? `${base}/${c.slug}` : null, pixReady: c.pixEnabled && !!c.pixSecretKey, ...menuOf(c),
+      slug: c.slug, menuUrl: base ? `${base}/${c.slug}` : null, tableMenuUrl, deliveryUrl, pixReady: c.pixEnabled && !!c.pixSecretKey, ...menuOf(c),
       companyName: c.name, companyLogo: c.logoPath, // prévia do topo do cardápio
     };
   }
@@ -604,14 +762,7 @@ export class MenuController {
   @Post('images') @Perms('produto.editar')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 3 * 1024 * 1024, files: 1 } }))
   async image(@CurrentUser() u: SessionUser, @UploadedFile() file?: UploadFile) {
-    if (!file?.buffer?.length) throw new BadRequestException('Envie a imagem no campo "file".');
-    // tipo pelo conteúdo, não pelo nome
-    const type = IMAGE_TYPES.find((t) => t.match(file.buffer));
-    if (!type) throw new BadRequestException('Formato não aceito. Envie JPG, PNG ou WEBP de até 3 MB.');
-    const name = `${randomBytes(12).toString('hex')}.${type.ext}`;
-    await mkdir(join(MENU_IMAGES_DIR, u.companyId), { recursive: true });
-    await writeFile(join(MENU_IMAGES_DIR, u.companyId, name), file.buffer);
-    return { url: `/uploads/menu/${u.companyId}/${name}` };
+    return { url: await saveCompanyImage(u.companyId, file) };
   }
 
   @Patch('settings') @Perms('cardapio.gerenciar')
@@ -668,7 +819,10 @@ export class MenuController {
     const saleId = dto.status === 'delivered' && o.table == null
       ? await this.toSale(u, [o], { payments: pay, branchId: dto.branchId }, req.ip)
       : null;
-    const updated = await this.db.menuOrder.update({ where: { id }, data: { status: dto.status, ...(saleId ? { saleId } : {}) } });
+    await ticketsFollow(this.db, u.companyId, id, dto.status);
+    const updated = await this.db.menuOrder.update({
+      where: { id }, data: { status: dto.status, ...stamps(o, dto.status), ...(saleId ? { saleId } : {}) },
+    });
     await this.audit.log(u, 'status', 'MenuOrder', id, { numero: o.number, de: o.status, para: dto.status }, req.ip);
     this.events.emit('update', updated);
     const { pixQrImage, pixQrCode, items, ...rest } = updated;
@@ -719,9 +873,11 @@ export class MenuController {
     if (items.length === 1) return this.cancel(u, id, dto, req);
     const [removed] = items.splice(i, 1);
     const subtotalCents = items.reduce((s, x) => s + x.totalCents, 0);
-    const updated = await this.db.menuOrder.update({
+    await this.db.menuOrder.update({
       where: { id }, data: { items: JSON.stringify(items), subtotalCents, totalCents: subtotalCents + o.deliveryFeeCents },
     });
+    // praça que ficou sem item perde a ficha; o status pode avançar (as outras já estavam prontas)
+    const updated = await pruneTickets(this.db, await this.db.menuOrder.findUniqueOrThrow({ where: { id } }));
     await this.audit.log(u, 'cancel_item', 'MenuOrder', id,
       { numero: o.number, mesa: o.table, item: `${removed.quantity}x ${removed.name}`, valor: removed.totalCents, motivo: dto.reason.trim() }, req.ip);
     this.events.emit('update', updated);
@@ -742,12 +898,51 @@ export class MenuController {
   @Get('tables') @Perms('mesa.atender')
   async tables(@CurrentUser() u: SessionUser) {
     const c = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
-    const rows = await this.db.menuOrder.findMany({
-      where: { companyId: u.companyId, table: { not: null }, saleId: null, status: { not: 'cancelled' } },
-      orderBy: { createdAt: 'asc' },
-    });
+    const rows = await openTableOrders(this.db, u.companyId);
     const m = menuOf(c);
-    return { tables: m.tables, serviceFeePercent: m.serviceFeePercent, orders: rows.map(({ pixQrImage, pixQrCode, items, ...o }) => ({ ...o, items: JSON.parse(items) })) };
+    const calls = (await openCalls(this.db, u.companyId)).map(({ id, table, kind, createdAt }) => ({ id, table, kind, createdAt }));
+    return {
+      tables: m.tables, serviceFeePercent: m.serviceFeePercent, calls,
+      orders: rows.map(({ pixQrImage, pixQrCode, items, ...o }) => ({ ...o, items: JSON.parse(items) })),
+    };
+  }
+
+  /** garçom foi à mesa: encerra os chamados abertos dela (garçom e conta) */
+  @Post('tables/:table/calls/attend') @Perms('mesa.atender') @HttpCode(200)
+  async attendCalls(@CurrentUser() u: SessionUser, @Param('table') t: string) {
+    return { attended: await this.attend(u, tableOf(t, 10_000)) };
+  }
+
+  private async attend(u: SessionUser, table: number) {
+    const open = await openCalls(this.db, u.companyId, table);
+    if (!open.length) return 0;
+    await this.db.tableCall.updateMany({
+      where: { id: { in: open.map((x) => x.id) }, attendedAt: null }, data: { attendedAt: new Date(), attendedBy: u.name },
+    });
+    for (const x of open) this.events.call(u.companyId, table, x.id, 'attended');
+    return open.length;
+  }
+
+  /** endereço do QR de cada mesa (o código muda por mesa; o operador imprime e cola na mesa) */
+  @Get('tables/qr') @Perms('mesa.atender')
+  async tableQrs(@CurrentUser() u: SessionUser) {
+    const c = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
+    const { tableUrl } = menuLinks(c.slug);
+    const n = menuOf(c).tables;
+    return {
+      store: c.tradeName || c.name, logo: c.logoPath,
+      tables: Array.from({ length: n }, (_, i) => ({ table: i + 1, url: tableUrl(i + 1, tableToken(c.id, i + 1)) })),
+    };
+  }
+
+  @Get('tables/:table/qr.png') @Perms('mesa.atender')
+  async tableQrPng(@CurrentUser() u: SessionUser, @Param('table') t: string, @Res() res: Response) {
+    const c = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
+    const table = tableOf(t, menuOf(c).tables);
+    const url = menuLinks(c.slug).tableUrl(table, tableToken(c.id, table));
+    if (!url) throw new BadRequestException('Defina MENU_URL no servidor para gerar o QR das mesas.');
+    const png = await QRCode.toBuffer(url, { width: 640, margin: 2, errorCorrectionLevel: 'M' });
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=300' }).send(png);
   }
 
   /** contas de mesa fechadas no dia (fuso da empresa): quem fechou é o operador da venda */
@@ -784,19 +979,8 @@ export class MenuController {
   async tableOrder(@CurrentUser() u: SessionUser, @Param('table') t: string, @Body() b: TableOrderDto, @Req() req: Request) {
     const c = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
     const table = tableOf(t, menuOf(c).tables);
-    const cart = await priceFromDb(this.db, c.id, b.items, 0);
-    const order = await insertOrder(this.db, c.id, {
-      table,
-      customerName: `Mesa ${table}`,
-      customerPhone: '',
-      deliveryType: 'table',
-      notes: [(b.notes ?? '').trim(), `Garçom: ${u.name}`].filter(Boolean).join(' · '),
-      items: JSON.stringify(cart.items),
-      subtotalCents: cart.subtotalCents,
-      deliveryFeeCents: 0,
-      totalCents: cart.totalCents,
-      paymentMethod: 'comanda',
-    });
+    const { order, cart } = await insertTableOrder(this.db, c.id, table,
+      b.items, [(b.notes ?? '').trim(), `Garçom: ${u.name}`].filter(Boolean).join(' · '));
     await this.audit.log(u, 'create', 'MenuOrder', order.id, { numero: order.number, mesa: table }, req.ip);
     this.events.emit('new', order);
     return { ...order, items: cart.items };
@@ -822,6 +1006,10 @@ export class MenuController {
       where: { companyId: u.companyId, id: { in: orders.map((o) => o.id) } }, data: { table: to, customerName: `Mesa ${to}` },
     });
     await this.audit.log(u, 'transfer', 'MenuTable', String(from), { para: to, pedidos: orders.map((o) => o.number) }, req.ip);
+    // mesa inteira mudou: o chamado em aberto vai junto
+    if (!dto.orderIds?.length) {
+      await this.db.tableCall.updateMany({ where: { companyId: u.companyId, table: from, attendedAt: null }, data: { table: to } });
+    }
     for (const o of orders) this.events.emit('update', { ...o, table: to });
     return { from, to, moved: orders.length };
   }
@@ -844,6 +1032,7 @@ export class MenuController {
     });
     await this.audit.log(u, 'close', 'MenuTable', String(table), { pedidos: orders.map((o) => o.number), saleId, taxa: service }, req.ip);
     for (const o of orders) this.events.emit('update', { ...o, status: 'delivered' });
+    await this.attend(u, table); // conta fechada: o pedido de conta (e o chamado) foi atendido
     return { saleId, serviceCents: service, totalCents: consumo + service };
   }
 
@@ -917,5 +1106,221 @@ export class MenuController {
   }
 }
 
-@Module({ imports: [PaymentsModule, SalesModule], controllers: [PublicMenuController, MenuController], providers: [MenuEvents] })
+// ---------- tela da cozinha ----------
+
+/** o que a cozinha pode fazer: aceitar, marcar pronto e desfazer um passo (toque errado) */
+const KITCHEN_MOVES: Record<string, string[]> = {
+  pending: ['preparing'],
+  preparing: ['ready', 'pending'],
+  ready: ['preparing'],
+};
+
+class KitchenStatusDto {
+  @IsIn(['pending', 'preparing', 'ready']) status!: string;
+}
+
+class StationDto {
+  @IsString() @MinLength(2) @MaxLength(40) name!: string;
+  @IsOptional() @IsInt() position?: number;
+  @IsOptional() @IsBoolean() active?: boolean;
+}
+
+class StationPatchDto {
+  @IsOptional() @IsString() @MinLength(2) @MaxLength(40) name?: string;
+  @IsOptional() @IsInt() position?: number;
+  @IsOptional() @IsBoolean() active?: boolean;
+}
+
+type KitchenRow = MenuOrder & { tickets: { id: string; stationId: string; status: string; acceptedAt: Date | null; readyAt: Date | null }[] };
+
+/**
+ * Perfil Cozinha: só vê o que preparar (sem preço, telefone, endereço ou Pix) e só move até "Pronto".
+ * Cada praça (Cozinha, Bar…) cuida da sua ficha; o pedido fica pronto quando todas terminam.
+ * Entregar, servir e gerar a venda continuam com o caixa/garçom.
+ */
+@Controller('api/kitchen')
+@Perms('cozinha.operar')
+export class KitchenController {
+  constructor(@Inject(PRISMA) private db: Db, private audit: AuditService, private events: MenuEvents) {}
+
+  @Sse('events')
+  @Header('X-Accel-Buffering', 'no')
+  events$(@CurrentUser() u: SessionUser) {
+    return this.events.stream(u.companyId, { calls: false });
+  }
+
+  // ---- praças ----
+
+  /** lista para a tela da cozinha e para os cadastros de categoria/produto (só nomes: qualquer perfil logado) */
+  @Get('stations') @Perms()
+  async stations(@CurrentUser() u: SessionUser, @Query('all') all = '') {
+    await ensureDefaultStation(this.db, u.companyId);
+    const rows = await this.db.kitchenStation.findMany({
+      where: { companyId: u.companyId, ...(all ? {} : { active: true }) },
+      orderBy: [{ isDefault: 'desc' }, { position: 'asc' }, { name: 'asc' }],
+      select: { id: true, name: true, position: true, active: true, isDefault: true },
+    });
+    return { rows };
+  }
+
+  @Post('stations') @Perms('empresa.gerenciar')
+  async createStation(@CurrentUser() u: SessionUser, @Body() dto: StationDto, @Req() req: Request) {
+    await ensureDefaultStation(this.db, u.companyId);
+    await this.uniqueName(u.companyId, dto.name);
+    const st = await this.db.kitchenStation.create({
+      data: { companyId: u.companyId, name: dto.name.trim(), position: dto.position ?? 0, active: dto.active ?? true },
+    });
+    await this.audit.log(u, 'create', 'KitchenStation', st.id, { nome: st.name }, req.ip);
+    return st;
+  }
+
+  @Patch('stations/:id') @Perms('empresa.gerenciar')
+  async updateStation(@CurrentUser() u: SessionUser, @Param('id') id: string, @Body() dto: StationPatchDto, @Req() req: Request) {
+    const st = await this.db.kitchenStation.findFirst({ where: { id, companyId: u.companyId } });
+    if (!st) throw new NotFoundException('Praça não encontrada.');
+    if (st.isDefault && dto.active === false) {
+      throw new BadRequestException(`"${st.name}" é a praça padrão: recebe o que não tem praça e não pode ser desativada.`);
+    }
+    if (dto.name) await this.uniqueName(u.companyId, dto.name, id);
+    const updated = await this.db.kitchenStation.update({
+      where: { id }, data: { name: dto.name?.trim(), position: dto.position, active: dto.active },
+    });
+    await this.audit.log(u, 'update', 'KitchenStation', id, AuditService.diff(st, updated), req.ip);
+    return updated;
+  }
+
+  private async uniqueName(companyId: string, name: string, except?: string) {
+    const dup = await this.db.kitchenStation.findFirst({
+      where: { companyId, name: { equals: name.trim(), mode: 'insensitive' }, ...(except ? { NOT: { id: except } } : {}) },
+    });
+    if (dup) throw new BadRequestException(`Já existe a praça "${dup.name}".`);
+  }
+
+  // ---- pedidos ----
+
+  /**
+   * Com `station`: as fichas daquela praça, só com os itens dela.
+   * Sem: visão de todas (quem despacha), com o andamento de cada praça.
+   */
+  @Get('orders')
+  async orders(@CurrentUser() u: SessionUser, @Query('station') station = '') {
+    const cozinha = await ensureDefaultStation(this.db, u.companyId);
+    const where = {
+      companyId: u.companyId, status: { in: ['pending', 'preparing', 'ready'] },
+      // pix ainda não pago não é pedido para a cozinha
+      NOT: { paymentStatus: { in: ['pending', 'rejected'] } },
+    };
+    const load = () => this.db.menuOrder.findMany({ where, orderBy: { createdAt: 'asc' }, take: 200, include: { tickets: true } });
+    let rows = await load();
+    if (await backfillTickets(this.db, u.companyId, cozinha.id, rows)) rows = await load();
+    const nomes = new Map((await this.db.kitchenStation.findMany({ where: { companyId: u.companyId } })).map((s) => [s.id, s.name]));
+    const linhas = rows.filter((o) => o.tickets.length).flatMap((o) => {
+      if (!station) return [kitchenOrder(o, cozinha.id, nomes)];
+      const t = o.tickets.find((x) => x.stationId === station);
+      return t ? [kitchenOrder(o, cozinha.id, nomes, t)] : [];
+    });
+    return { now: new Date(), rows: linhas };
+  }
+
+  /** praça marca a sua ficha; o pedido avança quando todas as praças chegam lá */
+  @Patch('tickets/:id/status')
+  async setTicket(@CurrentUser() u: SessionUser, @Param('id') id: string, @Body() dto: KitchenStatusDto, @Req() req: Request) {
+    const t = await this.db.kitchenTicket.findFirst({ where: { id, companyId: u.companyId }, include: { order: true, station: true } });
+    if (!t) throw new NotFoundException('Pedido não encontrado.');
+    this.assertKitchen(t.order);
+    if (!KITCHEN_MOVES[t.status]?.includes(dto.status)) {
+      throw new ConflictException(`Pedido #${t.order.number} mudou em outra tela. Atualize.`);
+    }
+    const now = new Date();
+    const updated = await this.db.$transaction(async (tx) => {
+      // status no where: duas telas tocando ao mesmo tempo, só a primeira passa
+      const done = await tx.kitchenTicket.updateMany({
+        where: { id, companyId: u.companyId, status: t.status },
+        data: {
+          status: dto.status,
+          ...(dto.status === 'preparing' && !t.acceptedAt ? { acceptedAt: now } : {}),
+          ...(dto.status === 'ready' ? { readyAt: now } : {}),
+        },
+      });
+      if (done.count !== 1) throw new ConflictException(`Pedido #${t.order.number} mudou em outra tela. Atualize.`);
+      return syncOrder(tx as Tx, t.orderId);
+    }, TX_KITCHEN);
+    await this.audit.log(u, 'status', 'MenuOrder', t.orderId,
+      { numero: t.order.number, praca: t.station.name, de: t.status, para: dto.status, tela: 'cozinha' }, req.ip);
+    this.events.emit('update', updated);
+    return this.row(u.companyId, t.orderId, t.stationId);
+  }
+
+  /** visão de todas as praças: move todas as fichas do pedido juntas */
+  @Patch('orders/:id/status')
+  async setStatus(@CurrentUser() u: SessionUser, @Param('id') id: string, @Body() dto: KitchenStatusDto, @Req() req: Request) {
+    const o = await this.db.menuOrder.findFirst({ where: { id, companyId: u.companyId }, include: { tickets: true } });
+    if (!o) throw new NotFoundException('Pedido não encontrado.');
+    this.assertKitchen(o);
+    if (!o.tickets.length) throw new ConflictException(`Pedido #${o.number} não passa pela cozinha.`);
+    if (!KITCHEN_MOVES[o.status]?.includes(dto.status)) {
+      throw new ConflictException(`Pedido #${o.number} mudou em outra tela. Atualize.`);
+    }
+    const updated = await this.db.$transaction(async (tx) => {
+      // trava otimista no pedido: duas telas tocando ao mesmo tempo, só a primeira passa
+      const lock = await tx.menuOrder.updateMany({
+        where: { id, companyId: u.companyId, status: o.status, saleId: null }, data: { updatedAt: new Date() },
+      });
+      if (lock.count !== 1) throw new ConflictException(`Pedido #${o.number} mudou em outra tela. Atualize.`);
+      // desfazer volta só as fichas que estavam no ponto de onde se volta
+      const of = { companyId: u.companyId, orderId: id };
+      if (dto.status === 'pending') await tx.kitchenTicket.updateMany({ where: { ...of, status: 'preparing' }, data: { status: 'pending' } });
+      else if (dto.status === 'preparing' && o.status === 'ready') {
+        await tx.kitchenTicket.updateMany({ where: { ...of, status: 'ready' }, data: { status: 'preparing' } });
+      } else await ticketsFollow(tx as Tx, u.companyId, id, dto.status);
+      return syncOrder(tx as Tx, id);
+    }, TX_KITCHEN);
+    await this.audit.log(u, 'status', 'MenuOrder', id, { numero: o.number, de: o.status, para: dto.status, tela: 'cozinha' }, req.ip);
+    this.events.emit('update', updated);
+    return this.row(u.companyId, id);
+  }
+
+  private assertKitchen(o: MenuOrder) {
+    if (o.status === 'cancelled') throw new ConflictException(`Pedido #${o.number} foi cancelado.`);
+    if (['pending', 'rejected'].includes(o.paymentStatus)) throw new BadRequestException('Pix ainda não foi pago.');
+    if (!['pending', 'preparing', 'ready'].includes(o.status) || o.saleId) {
+      throw new ConflictException(`Pedido #${o.number} já saiu da cozinha.`);
+    }
+  }
+
+  private async row(companyId: string, orderId: string, stationId?: string) {
+    const [o, cozinha, stations] = await Promise.all([
+      this.db.menuOrder.findUniqueOrThrow({ where: { id: orderId }, include: { tickets: true } }),
+      ensureDefaultStation(this.db, companyId),
+      this.db.kitchenStation.findMany({ where: { companyId } }),
+    ]);
+    const nomes = new Map(stations.map((s) => [s.id, s.name]));
+    return kitchenOrder(o, cozinha.id, nomes, stationId ? o.tickets.find((t) => t.stationId === stationId) : undefined);
+  }
+}
+
+const TX_KITCHEN = { maxWait: 10_000, timeout: 15_000 };
+
+/**
+ * Só o que a cozinha precisa para preparar. Com a ficha (`t`): status, horários e itens daquela
+ * praça; sem: o pedido inteiro, cada item com o nome da praça.
+ */
+function kitchenOrder(o: KitchenRow, defaultId: string, nomes: Map<string, string>, t?: KitchenRow['tickets'][number]) {
+  const items = itemsOf(o)
+    .map((i) => ({ ...i, stationId: stationOf(i, defaultId) }))
+    .filter((i) => i.stationId && (!t || i.stationId === t.stationId))
+    .map((i) => ({ name: i.name, quantity: i.quantity, additionals: i.additionals.map((a) => a.name), station: nomes.get(i.stationId!) ?? null }));
+  return {
+    id: o.id, number: o.number, ticketId: t?.id ?? null,
+    status: t?.status ?? o.status,
+    type: o.table != null ? 'table' : o.deliveryType, table: o.table,
+    customerName: o.customerName, notes: o.notes, items,
+    createdAt: o.createdAt, acceptedAt: t ? t.acceptedAt : o.acceptedAt, readyAt: t ? t.readyAt : o.readyAt,
+    // andamento de cada praça do pedido (a tela mostra quando há mais de uma)
+    stations: o.tickets.map((x) => ({ id: x.stationId, name: nomes.get(x.stationId) ?? '', status: x.status }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
+@Module({ imports: [PaymentsModule, SalesModule], controllers: [PublicMenuController, MenuController, KitchenController], providers: [MenuEvents] })
 export class MenuModule {}

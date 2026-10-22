@@ -22,6 +22,7 @@ import { Screen15Sobre } from './screens/Screen15Sobre';
 import { Screen16Suporte } from './screens/Screen16Suporte';
 import { Screen17Configuracoes } from './screens/Screen17Configuracoes';
 import { ScreenPix } from './screens/ScreenPix';
+import { ScreenMinhaMesa } from './screens/ScreenMinhaMesa';
 
 export function App() {
   const { currentScreen, menu, slug } = useApp();
@@ -47,6 +48,8 @@ export function App() {
         return <Screen08Pagamento />;
       case 'pix':
         return <ScreenPix />;
+      case 'minha_mesa':
+        return <ScreenMinhaMesa />;
       case 'pedido_realizado':
         return <Screen09PedidoRealizado />;
       case 'meus_pedidos':

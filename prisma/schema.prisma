@@ -172,6 +172,9 @@ model Company {
   auditLogs      AuditLog[]
   idempotency    IdempotencyKey[]
   menuOrders     MenuOrder[]
+  tableCalls     TableCall[]
+  kitchenStations KitchenStation[]
+  kitchenTickets  KitchenTicket[]
 
   @@index([status, createdAt])
 }
@@ -217,7 +220,7 @@ model User {
   name           String
   email          String
   passwordHash   String
-  role           String    @default("caixa") // proprietario|admin|gerente|caixa|estoquista|financeiro
+  role           String    @default("caixa") // proprietario|admin|gerente|caixa|estoquista|financeiro|garcom|cozinha
   active         Boolean   @default(true)
   blockedAt      DateTime?
   lastLoginAt    DateTime?
@@ -304,12 +307,14 @@ model Category {
   // cardápio: 1 = sem meio a meio; 2..4 = cliente divide a pizza em até N sabores desta categoria
   maxFlavors  Int     @default(1)
   position    Int     @default(0)
+  stationId   String? // praça da cozinha dos produtos desta categoria (vazio = Cozinha padrão)
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  station  KitchenStation? @relation(fields: [stationId], references: [id], onDelete: SetNull)
   products Product[]
 
   @@index([companyId])
@@ -342,6 +347,18 @@ model Product {
   menuOptions   String  @default("{}")
   position      Int     @default(0)
 
+  // ---- Bilheteria (modo bilheteria): tudo opcional, impresso no ingresso ----
+  eventName   String? // nome do evento
+  eventDate   DateTime? // data/hora do evento
+  ticketType  String? // tipo de ingresso (inteira, meia, VIP…)
+  ticketBox   Boolean @default(false) // camarote
+  boxNumber   String? // número do camarote
+  tableNumber String? // mesa numerada
+
+  // ---- Cozinha: onde é preparado (vazio herda da categoria; kitchenSkip = não vai para nenhuma tela) ----
+  stationId   String?
+  kitchenSkip Boolean @default(false)
+
   // ---- Dados fiscais (NF-e) ----
   ncm          String? // 8 dígitos — obrigatório para emitir
   cest         String? // 7 dígitos — quando sujeito a Substituição Tributária
@@ -363,6 +380,7 @@ model Product {
 
   company    Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   category   Category?        @relation(fields: [categoryId], references: [id])
+  station    KitchenStation?  @relation(fields: [stationId], references: [id], onDelete: SetNull)
   stocks     Stock[]
   movements  StockMovement[]
   entryItems StockEntryItem[]
@@ -719,6 +737,10 @@ model Sale {
   responseCode      String? // código de retorno do SiTef ("0", "-2"…)
   paidAt            DateTime? // aprovação informada pela maquininha
   paymentReportedAt DateTime? // última vez que a maquininha informou o resultado
+  // modo bilheteria: a venda é o ingresso (o QR leva o id) e só pode ser queimada uma vez
+  ticketRedeemedAt       DateTime?
+  ticketRedeemedById     String? // operador que leu o ingresso
+  ticketRedeemedTerminal String? // número de série da maquininha que leu
   number         Int
   status         String  @default("COMPLETED") // OPEN|COMPLETED|CANCELLED|REFUNDED
   subtotalCents  Int     @default(0)
@@ -878,18 +900,80 @@ model MenuOrder {
   pixChargeId      String?
   pixQrCode        String?
   pixQrImage       String? // base64 do PNG, sem o prefixo data:
-  status           String  @default("pending") // pending | preparing | delivering | delivered | cancelled
+  status           String  @default("pending") // pending | preparing | ready | delivering | delivered | cancelled
+  acceptedAt       DateTime? // cozinha aceitou (entrou em preparo)
+  readyAt          DateTime? // cozinha marcou pronto
   cancelReason     String? // motivo do cancelamento (pedido inteiro)
   saleId           String? // venda gerada quando o pedido é entregue
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  tickets KitchenTicket[]
 
   @@unique([companyId, number])
   @@index([companyId, status, createdAt])
   @@index([companyId, table, saleId])
+}
+
+/// Chamado da mesa pelo QR: o cliente chama o garçom ou pede a conta; fica aberto até alguém atender.
+model TableCall {
+  id         String    @id @default(uuid())
+  companyId  String
+  table      Int
+  kind       String // waiter (chamar o garçom) | bill (pedir a conta)
+  createdAt  DateTime  @default(now())
+  attendedAt DateTime?
+  attendedBy String? // nome de quem atendeu
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, attendedAt, table])
+}
+
+/// Praça da cozinha (Cozinha, Bar, Chapa…). Toda empresa tem a "Cozinha" padrão, que recebe
+/// o que não tem praça definida; ela pode ser renomeada, mas não desativada.
+model KitchenStation {
+  id         String  @id @default(cuid())
+  companyId  String
+  name       String
+  position   Int     @default(0)
+  active     Boolean @default(true)
+  isDefault  Boolean @default(false)
+  defaultFor String? @unique // = companyId na praça padrão: garante uma só por empresa
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company    Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  categories Category[]
+  products   Product[]
+  tickets    KitchenTicket[]
+
+  @@index([companyId])
+}
+
+/// Ficha de uma praça para um pedido: cada praça aceita e marca pronto a sua parte.
+/// Os itens não são copiados: vêm do pedido, pela praça gravada em cada item.
+model KitchenTicket {
+  id         String    @id @default(cuid())
+  companyId  String
+  orderId    String
+  stationId  String
+  status     String    @default("pending") // pending | preparing | ready
+  acceptedAt DateTime?
+  readyAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  order   MenuOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  station KitchenStation @relation(fields: [stationId], references: [id])
+
+  @@unique([orderId, stationId])
+  @@index([companyId, stationId, status])
 }
 
 // ---------- Caixa ----------

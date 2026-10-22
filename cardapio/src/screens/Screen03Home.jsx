@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Menu, ChevronRight } from 'lucide-react';
+import { Menu, ChevronRight, BellRing } from 'lucide-react';
 import { ScrollRow } from '../components/ScrollRow';
 import { useApp, brl } from '../context/AppContext';
 import { BottomNav } from '../components/BottomNav';
@@ -7,7 +7,7 @@ import { AddButton } from '../components/AddButton';
 import { SideMenu } from '../components/SideMenu';
 
 export function Screen03Home() {
-  const { navigateTo, selectedCategory, setSelectedCategory, setCategoryFilter, setSelectedProduct, addToCart, storeInfo, categories, products } = useApp();
+  const { navigateTo, selectedCategory, setSelectedCategory, setCategoryFilter, setSelectedProduct, addToCart, storeInfo, categories, products, dine, table, callStaff, notify } = useApp();
 
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -63,7 +63,26 @@ export function Screen03Home() {
             )}
           </div>
 
-          {/* Status aberto/fechado */}
+          {/* Status aberto/fechado; na mesa, o número da mesa (o cliente já está na loja) */}
+          {dine ? (
+            <div className="flex items-center gap-1.5 shrink-0">
+              {table && (
+                <button
+                  onClick={() => callStaff('waiter').catch((e) => notify(e.message))}
+                  aria-label="Chamar garçom"
+                  className="w-8 h-8 bg-[#1A1A1E] border border-white/10 rounded-full flex items-center justify-center text-white shadow-sm transition active:scale-90"
+                >
+                  <BellRing size={15} />
+                </button>
+              )}
+              <div
+                onClick={() => table && navigateTo('minha_mesa')}
+                className="bg-[#1A1A1E] border border-white/10 px-3 py-1.5 rounded-full flex items-center cursor-pointer shadow-sm transition active:scale-95"
+              >
+                <span className="text-xs font-bold text-white">{table ? `Mesa ${table}` : 'Cardápio'}</span>
+              </div>
+            </div>
+          ) : (
           <div 
             onClick={() => navigateTo('sobre')}
             className="bg-[#1A1A1E] hover:bg-[#25252B] border border-white/10 px-3 py-1.5 rounded-full flex items-center space-x-1.5 cursor-pointer shadow-sm transition active:scale-95 shrink-0"
@@ -71,6 +90,7 @@ export function Screen03Home() {
             <span className={`w-2 h-2 rounded-full ${storeInfo.is_open ? 'bg-emerald-400' : 'bg-red-500'}`} />
             <span className="text-xs font-bold text-white">{storeInfo.is_open ? 'Aberto' : 'Fechado'}</span>
           </div>
+          )}
         </div>
 
         {/* Hero Banner da loja */}
@@ -90,7 +110,7 @@ export function Screen03Home() {
         {/* White Main Container with Rounded Top Corners */}
         <div className="relative -mt-4 bg-white rounded-t-[30px] pt-4 px-4 pb-24 shadow-2xl min-h-[500px]">
           
-          {!storeInfo.is_open && (
+          {!dine && !storeInfo.is_open && (
             <div className="mb-3 rounded-2xl bg-red-50 border border-red-100 px-3 py-2 text-xs font-semibold text-red-600">
               Estamos fechados agora. Horário: {storeInfo.hours}
             </div>

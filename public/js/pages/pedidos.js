@@ -11,7 +11,9 @@ import {
 // `cor` vira a classe lf-ped-<cor> (app.css): faixa, ícone e chip do card
 const STATUS = {
   pending: { label: 'Novo', cor: 'novo', icone: 'bell', next: 'preparing', action: 'Aceitar e preparar', acaoIcone: 'check' },
-  preparing: { label: 'Preparando', cor: 'preparo', icone: 'clock', next: 'delivering', action: 'Saiu para entrega', acaoIcone: 'truck' },
+  preparing: { label: 'Preparando', cor: 'preparo', icone: 'clock', next: 'ready', action: 'Pronto', acaoIcone: 'check' },
+  // a cozinha marca pronto (tela da cozinha); daqui o balcão despacha
+  ready: { label: 'Pronto', cor: 'pronto', icone: 'package', next: 'delivering', action: 'Saiu para entrega', acaoIcone: 'truck' },
   delivering: { label: 'Saiu para entrega', cor: 'rota', icone: 'truck', next: 'delivered', action: 'Entregue', acaoIcone: 'check-circle' },
   delivered: { label: 'Entregue', cor: 'feito', icone: 'check-circle' },
   cancelled: { label: 'Cancelado', cor: 'cancelado', icone: 'x-circle' },
@@ -19,12 +21,20 @@ const STATUS = {
 /** mesa: depois de pronto é servido, sem entrega; a venda sai ao fechar a conta */
 const MESA = {
   ...STATUS,
-  preparing: { ...STATUS.preparing, next: 'delivered', action: 'Servido', acaoIcone: 'check-circle' },
+  ready: { ...STATUS.ready, label: 'Pronto para servir', next: 'delivered', action: 'Servido', acaoIcone: 'check-circle' },
   delivered: { ...STATUS.delivered, label: 'Servido' },
 };
-const etapa = (o, status) => (o.table != null ? MESA : STATUS)[status];
+/** retirada: pronto já é "pode buscar"; não passa por "saiu para entrega" */
+const RETIRADA = {
+  ...STATUS,
+  ready: { ...STATUS.ready, label: 'Pronto para retirar', next: 'delivered', action: 'Retirado', acaoIcone: 'check-circle' },
+  delivered: { ...STATUS.delivered, label: 'Retirado' },
+};
+const fluxo = (o) => (o.table != null ? MESA : o.deliveryType === 'pickup' ? RETIRADA : STATUS);
+const etapa = (o, status) => fluxo(o)[status];
 /** etapas da linha do tempo, na ordem */
-const ETAPAS = (o) => (o.table != null ? ['pending', 'preparing', 'delivered'] : ['pending', 'preparing', 'delivering', 'delivered']);
+const ETAPAS = (o) => (o.table != null || o.deliveryType === 'pickup'
+  ? ['pending', 'preparing', 'ready', 'delivered'] : ['pending', 'preparing', 'ready', 'delivering', 'delivered']);
 
 /** como chega ao cliente */
 function tipo(o) {
@@ -55,8 +65,11 @@ const whatsapp = (fone) => {
 };
 const chip = ({ icone, texto }, extra = '') => h('span', { class: `lf-ped-chip ${extra}` }, icon(icone, 13), texto);
 
+/** etapas em andamento, na ordem dos contadores do topo */
+const ATIVOS = ['pending', 'preparing', 'ready', 'delivering'];
+
 const FILTROS = [
-  ['pending,preparing,delivering', 'Em andamento'],
+  ['pending,preparing,ready,delivering', 'Em andamento'],
   ['pending', 'Novos'],
   ['delivered', 'Entregues'],
   ['cancelled', 'Cancelados'],
@@ -85,7 +98,7 @@ export default async function render({ content, can }) {
       class: `btn btn-sm ${v === filtro ? 'btn-primary' : 'btn-outline-primary'}`,
       onclick: () => { filtro = v; page = 1; desenharAbas(); carregar(); },
     }, label)));
-    resumo.querySelectorAll('.lf-ped-contador').forEach((b, i) => b.classList.toggle('ativo', ['pending', 'preparing', 'delivering'][i] === filtro));
+    resumo.querySelectorAll('.lf-ped-contador').forEach((b, i) => b.classList.toggle('ativo', ATIVOS[i] === filtro));
   }
 
   /** pedido por WhatsApp: pergunta como o cliente pagou na entrega */
@@ -256,7 +269,7 @@ export default async function render({ content, can }) {
 
   /** quantos em cada etapa ativa; clicar filtra */
   async function contar() {
-    const ativos = ['pending', 'preparing', 'delivering'];
+    const ativos = ATIVOS;
     const totais = await Promise.all(ativos.map((s) => get('/menu/orders', { status: s, pageSize: 1 }).then((r) => r.total)));
     resumo.replaceChildren(...ativos.map((s, i) => {
       const e = STATUS[s];

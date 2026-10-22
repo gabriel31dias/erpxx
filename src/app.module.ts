@@ -38,10 +38,11 @@ const localAssets = join(__dirname, '..', 'public', 'assets');
 const themeAssets = existsSync(localAssets) ? localAssets : join(__dirname, '..', '..', 'assets');
 
 // App do cardápio (cardapio/dist, build com base /cardapio/) no mesmo domínio do ERP:
-// cliente em /cardapio/<slug> e garçom em /garcom. Vem antes do public/, cujo fallback pega tudo.
+// cardápio da mesa em /cardapio/<slug>/mesa/<n> (QR), delivery em /delivery/<slug> (o antigo /cardapio/<slug>
+// continua abrindo o delivery) e garçom em /garcom. Vem antes do public/, cujo fallback pega tudo.
 const menuApp = join(__dirname, '..', 'cardapio', 'dist');
 const menuAppRoots = existsSync(join(menuApp, 'index.html'))
-  ? [{ rootPath: menuApp, serveRoot: '/cardapio' }, { rootPath: menuApp, serveRoot: '/garcom' }]
+  ? ['/cardapio', '/delivery', '/garcom'].map((serveRoot) => ({ rootPath: menuApp, serveRoot }))
   : [];
 
 @Module({

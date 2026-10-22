@@ -99,14 +99,14 @@ async function shrink(file) {
 }
 
 /** Foto do cardápio (multipart vai direto no fetch: o cliente acima só manda JSON). Devolve a URL pública. */
-export async function uploadImage(file) {
+export async function uploadImage(file, path = '/menu/images') {
   const form = new FormData();
   form.append('file', await shrink(file), 'imagem');
-  const res = await fetch('/api/menu/images', {
+  const res = await fetch(`/api${path}`, {
     method: 'POST', body: form, credentials: 'same-origin', headers: { 'X-Requested-With': 'lojaflow' },
   });
   const data = await res.json().catch(() => ({}));
   if (res.status === 413) throw new ApiError('Imagem muito grande. Envie uma de até 3 MB.', 413);
   if (!res.ok) throw new ApiError(data.message || 'Falha ao enviar a imagem.', res.status);
-  return data.url;
+  return data.url ?? data.logoPath;
 }

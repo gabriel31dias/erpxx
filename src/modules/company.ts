@@ -1,12 +1,15 @@
 import {
   BadRequestException, Body, Controller, Delete, Get, Inject, Module, NotFoundException,
-  Param, Patch, Post, Req,
+  Param, Patch, Post, Req, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
-import { IsBoolean, IsEmail, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { IsBoolean, IsEmail, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
 import type { Request } from 'express';
 import { PRISMA, Db } from '../common/prisma.service';
 import { CurrentUser, Perms, SessionUser } from '../common/auth.guard';
 import { AuditService, DEFAULT_SETTINGS, PlanService, SettingsService, TimeService } from '../common/core';
+import type { UploadFile } from './attachments';
+import { saveCompanyImage } from './menu';
 
 class CompanyDto {
   @IsString() @MinLength(2) name!: string;
@@ -40,6 +43,8 @@ class SettingsDto {
   @IsOptional() @IsInt() @Min(1) crediarioIntervalDays?: number;
   @IsOptional() @IsInt() @Min(0) crediarioGraceDays?: number;
   @IsOptional() @IsInt() @Min(20) visitRadiusM?: number;
+  @IsOptional() @IsBoolean() ticketMode?: boolean;
+  @IsOptional() @IsNumber() @Min(0) @Max(100) cloverFeePct?: number;
 }
 
 class PixConfigDto {
@@ -106,6 +111,23 @@ export class CompanyController {
     return { enabled: fresh.pixEnabled, configured: !!fresh.pixSecretKey };
   }
 
+  /** Logo da loja (comprovante, maquininha, cardápio). Fica numa URL pública. */
+  @Post('logo') @Perms('empresa.gerenciar')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 3 * 1024 * 1024, files: 1 } }))
+  async uploadLogo(@CurrentUser() u: SessionUser, @UploadedFile() file: UploadFile | undefined, @Req() req: Request) {
+    const logoPath = await saveCompanyImage(u.companyId, file);
+    await this.db.company.update({ where: { id: u.companyId }, data: { logoPath } });
+    await this.audit.log(u, 'update', 'Company', u.companyId, { logo: logoPath }, req.ip);
+    return { logoPath };
+  }
+
+  @Delete('logo') @Perms('empresa.gerenciar')
+  async removeLogo(@CurrentUser() u: SessionUser, @Req() req: Request) {
+    await this.db.company.update({ where: { id: u.companyId }, data: { logoPath: null } });
+    await this.audit.log(u, 'update', 'Company', u.companyId, { logo: null }, req.ip);
+    return { logoPath: null };
+  }
+
   @Patch() @Perms('empresa.gerenciar')
   async update(@CurrentUser() u: SessionUser, @Body() dto: CompanyDto, @Req() req: Request) {
     const before = await this.db.company.findUniqueOrThrow({ where: { id: u.companyId } });
@@ -116,7 +138,9 @@ export class CompanyController {
         phone: dto.phone || null, whatsapp: dto.whatsapp || dto.phone || null,
         email: dto.email?.toLowerCase() || null, zip: dto.zip || null, address: dto.address || null,
         number: dto.number || null, complement: dto.complement || null, district: dto.district || null,
-        city: dto.city || null, state: dto.state || null, logoPath: dto.logoPath || null,
+        city: dto.city || null, state: dto.state || null,
+        // o logo tem rota própria (POST /logo); o formulário que não manda o campo não apaga
+        logoPath: dto.logoPath !== undefined ? dto.logoPath || null : before.logoPath,
         timezone: dto.timezone || before.timezone, theme: dto.theme || before.theme,
       },
     });

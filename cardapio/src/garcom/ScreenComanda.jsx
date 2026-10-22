@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeftRight, Plus, Receipt, X } from 'lucide-react';
+import { ArrowLeftRight, BellRing, Plus, Receipt, X } from 'lucide-react';
 import { useApp, brl } from '../context/AppContext';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { BottomNav } from '../components/BottomNav';
@@ -8,6 +8,7 @@ import { waiterApi } from '../lib/api';
 const STATUS = {
   pending: { label: 'Novo', cls: 'bg-amber-500/15 text-amber-400 border-amber-500/30' },
   preparing: { label: 'Preparando', cls: 'bg-sky-500/15 text-sky-400 border-sky-500/30' },
+  ready: { label: 'Pronto p/ servir', cls: 'bg-teal-500/15 text-teal-300 border-teal-500/30' },
   delivering: { label: 'Preparando', cls: 'bg-sky-500/15 text-sky-400 border-sky-500/30' },
   delivered: { label: 'Servido', cls: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
 };
@@ -43,7 +44,7 @@ const backBtn = 'flex-1 py-3 rounded-2xl text-sm font-bold text-zinc-300 bg-[#0E
 
 /** comanda da mesa: pedidos ainda sem venda, cancelar, transferir e fechar a conta */
 export function ScreenComanda() {
-  const { table, comanda, navigateTo, canCloseTable, cancelOrder, cancelItem, notify } = useApp();
+  const { table, comanda, calls, attendTable, navigateTo, canCloseTable, cancelOrder, cancelItem, notify } = useApp();
   const [sheet, setSheet] = useState(null); // { type: 'reason' | 'transfer' | 'close', ... }
   const total = comanda.reduce((s, o) => s + o.totalCents, 0);
   // garçom cancela só o que a cozinha ainda não aceitou; o servidor confere de novo
@@ -85,6 +86,24 @@ export function ScreenComanda() {
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3 scrollbar-none">
+        {calls.length > 0 && (
+          <div role="alert" className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-amber-400 text-zinc-900">
+            {calls.some((c) => c.kind === 'bill') ? <Receipt size={18} className="shrink-0" /> : <BellRing size={18} className="shrink-0" />}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-black">
+                {calls.some((c) => c.kind === 'bill') ? 'Pediu a conta' : 'Chamando o garçom'}
+                {calls.length > 1 && ' · chamou o garçom também'}
+              </p>
+              <p className="text-[11px] font-semibold">desde {hour(calls[0].createdAt)}</p>
+            </div>
+            <button
+              onClick={() => attendTable().catch((e) => notify(e.message))}
+              className="px-3 py-2 rounded-xl bg-zinc-900 text-white text-xs font-bold active:scale-95"
+            >
+              Atendido
+            </button>
+          </div>
+        )}
         {comanda.length === 0 && (
           <p className="py-12 text-center text-xs text-zinc-500">Mesa livre. Lance o primeiro pedido.</p>
         )}

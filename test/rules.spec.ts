@@ -59,7 +59,8 @@ function client(base: string, cookie = '') {
     try { data = JSON.parse(text); } catch { /* csv/texto puro */ }
     return { status: res.status, data };
   };
-  return call;
+  // sessão atual, para chamadas fora do JSON (upload) sem gastar outro login
+  return Object.assign(call, { cookie: () => cookie });
 }
 
 async function main() {
@@ -269,6 +270,29 @@ async function main() {
     assert.equal(movs.data.rows.length, 1);
     assert.equal(movs.data.rows[0].type, 'ENTRADA');
     assert.equal(movs.data.rows[0].after, 10);
+    // vira uma entrada de mercadoria, com o custo do cadastro
+    const entrada = (await api('GET', '/api/stock/entries')).data.rows.find((e: any) => e.notes === 'Estoque inicial do cadastro');
+    assert.ok(entrada, 'entrada do estoque inicial');
+    assert.equal(entrada.totalCents, 6000);
+    assert.equal(movs.data.rows[0].refId, entrada.id);
+  });
+
+  await check('editar o produto com quantidade soma ao estoque por uma nova entrada', async () => {
+    const atual = (await api('GET', `/api/products/${productId}`)).data.product;
+    const r = await api('PATCH', `/api/products/${productId}`, {
+      name: atual.name, priceCents: atual.priceCents, costCents: atual.costCents, barcode: atual.barcode,
+      categoryId: atual.categoryId, minStock: atual.minStock, addStock: 5,
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal((await api('GET', `/api/products/${productId}`)).data.product.stock, 15);
+    const entradas = (await api('GET', '/api/stock/entries')).data.rows.filter((e: any) => e.notes === 'Entrada pelo cadastro do produto');
+    assert.equal(entradas.length, 1);
+    assert.equal(entradas[0].totalCents, 3000);
+    // sem addStock, salvar não mexe no estoque
+    await api('PATCH', `/api/products/${productId}`, { name: atual.name, priceCents: atual.priceCents, costCents: atual.costCents, barcode: atual.barcode, categoryId: atual.categoryId, minStock: atual.minStock });
+    assert.equal((await api('GET', `/api/products/${productId}`)).data.product.stock, 15);
+    // reverte para não mexer nas contas dos testes seguintes
+    await api('POST', '/api/stock/adjust', { productId, quantity: 10, reason: 'volta ao saldo do teste' });
   });
 
   await check('código de barras duplicado é recusado', async () => {
@@ -1397,6 +1421,96 @@ async function main() {
       { status: 'approved', terminalId: MAQ })).status, 404);
   });
 
+  await check('maquininha confere o estoque antes de cobrar; venda de outra máquina esgota', async () => {
+    const ultimo = await api('POST', '/api/products', { name: 'Último da prateleira', priceCents: 700, initialStock: 1 });
+    const conferir = (items: any[]) => api('POST', '/api/sales/stock-check', { items });
+    const antes = await conferir([{ productId: ultimo.data.id, quantity: 1 }]);
+    assert.equal(antes.status, 200, JSON.stringify(antes.data));
+    assert.equal(antes.data.ok, true);
+    assert.deepEqual([antes.data.items[0].available, antes.data.items[0].reason], [1, null]);
+    // a mesma linha repetida no carrinho soma
+    const dobrado = await conferir([{ productId: ultimo.data.id, quantity: 1 }, { productId: ultimo.data.id, quantity: 1 }]);
+    assert.deepEqual([dobrado.data.ok, dobrado.data.items.length, dobrado.data.items[0].requested], [false, 1, 2]);
+    const vendeu = await api('POST', '/api/sales', {
+      terminalId: 'OUTRA-MAQ-0002', items: [{ productId: ultimo.data.id, quantity: 1 }],
+      payments: [{ paymentMethodId: dinheiro.id, amountCents: 700 }],
+    });
+    assert.equal(vendeu.status, 201, JSON.stringify(vendeu.data));
+    const depois = await conferir([{ productId: ultimo.data.id, quantity: 1 }, { productId, quantity: 1 }]);
+    assert.equal(depois.data.ok, false);
+    assert.deepEqual(depois.data.items.map((i: any) => [i.available, i.ok, i.reason]),
+      [[0, false, 'insufficient'], [depois.data.items[1].available, true, null]]);
+    // produto de outra empresa não vaza; carrinho vazio dá 400
+    const alheio = await outra('POST', '/api/sales/stock-check', { items: [{ productId, quantity: 1 }] });
+    assert.deepEqual([alheio.data.ok, alheio.data.items[0].reason, alheio.data.items[0].name], [false, 'not_found', null]);
+    assert.equal((await conferir([])).status, 400);
+  });
+
+  // ---------- modo bilheteria ----------
+  console.log('\nModo bilheteria');
+  const queimar = (id: string, terminalId = MAQ) => api('POST', `/api/sales/${id}/ticket/redeem`, { terminalId });
+  const show = await api('POST', '/api/products', {
+    name: 'Ingresso pista', priceCents: 5000, initialStock: 100,
+    eventName: 'Show de Verão', eventDate: '2026-12-20T22:00:00.000Z', ticketType: 'Meia', ticketBox: true, tableNumber: '12',
+  });
+  const ingresso = () => api('POST', '/api/sales', {
+    terminalId: MAQ, items: [{ productId: show.data.id, quantity: 1 }], payments: [{ paymentMethodId: dinheiro.id, amountCents: 5000 }],
+  });
+
+  await check('bilheteria desligada: a maquininha vê e a queima é recusada', async () => {
+    const cfg = (await api('GET', '/api/sales/terminal-config')).data;
+    assert.equal(cfg.ticketMode, false);
+    // empresa sem logo: o comprovante usa o da Blue, com a URL inteira
+    assert.match(cfg.store.logoUrl, /^https?:\/\/.+\/icons\/brand\.png$/);
+    assert.equal((await queimar(emDinheiro.data.id)).status, 403);
+  });
+
+  await check('bilheteria ligada: queima uma vez só, com quem e onde', async () => {
+    await api('PATCH', '/api/company/settings', { ticketMode: true });
+    assert.equal((await api('GET', '/api/sales/terminal-config')).data.ticketMode, true);
+    const v = await ingresso();
+    const t = (await api('GET', `/api/sales/${v.data.id}/ticket`)).data;
+    assert.equal(t.state, 'valid');
+    // dados do evento saem do cadastro do produto para a maquininha imprimir
+    assert.deepEqual(
+      [t.items[0].eventName, t.items[0].eventDate, t.items[0].ticketType, t.items[0].ticketBox, t.items[0].tableNumber],
+      ['Show de Verão', '2026-12-20T22:00:00.000Z', 'Meia', true, '12']);
+    const r = await queimar(v.data.id);
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal(r.data.redeemed, true);
+    assert.equal(r.data.ticket.state, 'redeemed');
+    assert.equal(r.data.ticket.redeemedTerminal, MAQ);
+    assert.ok(r.data.ticket.redeemedBy && r.data.ticket.redeemedAt);
+    const deNovo = await queimar(v.data.id, 'OUTRA-MAQ-0002');
+    assert.equal(deNovo.status, 409);
+    assert.equal(deNovo.data.reason, 'redeemed');
+    assert.equal(deNovo.data.ticket.redeemedTerminal, MAQ);
+    assert.equal(await db.auditLog.count({ where: { entityId: v.data.id, action: 'ticket_redeem' } }), 1);
+  });
+
+  await check('duas maquininhas lendo o mesmo QR ao mesmo tempo: só uma passa', async () => {
+    const v = await ingresso();
+    const rs = await Promise.all([queimar(v.data.id), queimar(v.data.id, 'OUTRA-MAQ-0002'), queimar(v.data.id)]);
+    assert.deepEqual(rs.map((r) => r.status).sort(), [200, 409, 409]);
+  });
+
+  await check('ingresso sem pagamento aprovado, cancelado, inexistente ou de outra empresa não passa', async () => {
+    const pendente = await api('POST', '/api/sales', {
+      terminalId: MAQ, items: [{ productId: show.data.id, quantity: 1 }], payments: [{ paymentMethodId: credito.id, amountCents: 5000 }],
+    });
+    const p = await queimar(pendente.data.id);
+    assert.deepEqual([p.status, p.data.reason], [409, 'payment_pending']);
+    const v = await ingresso();
+    await api('POST', `/api/sales/${v.data.id}/cancel`, { reason: 'Desistiu do show' });
+    const c = await queimar(v.data.id);
+    assert.deepEqual([c.status, c.data.reason], [409, 'cancelled']);
+    assert.equal((await queimar('nao-existe')).status, 404);
+    await outra('PATCH', '/api/company/settings', { ticketMode: true });
+    assert.equal((await outra('POST', `/api/sales/${pendente.data.id}/ticket/redeem`, {})).status, 404);
+    await outra('PATCH', '/api/company/settings', { ticketMode: false });
+    await api('PATCH', '/api/company/settings', { ticketMode: false });
+  });
+
   // ---------- cardápio digital ----------
   console.log('\nCardápio digital');
   const { priceCart } = await import('../src/modules/menu');
@@ -1548,6 +1662,34 @@ async function main() {
     assert.equal((await fetch(`${base}/uploads/menu/nao-existe.png`)).status, 404);
   });
 
+  await check('logo da loja: upload grava, maquininha recebe a URL inteira, salvar os dados não apaga', async () => {
+    const cookie = api.cookie();
+    const envia = (bytes: Buffer) => {
+      const form = new FormData();
+      form.append('file', new Blob([bytes]), 'logo.png');
+      return fetch(`${base}/api/company/logo`, { method: 'POST', body: form, headers: { cookie, 'X-Requested-With': 'lojaflow' } });
+    };
+    const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a5d90000000049454e44ae426082', 'hex');
+    const r = await envia(png);
+    assert.equal(r.status, 201);
+    const { logoPath } = await r.json();
+    assert.match(logoPath, /^\/uploads\/menu\/\w+\/[0-9a-f]{24}\.png$/);
+    assert.equal((await envia(Buffer.from('não é imagem'))).status, 400);
+    const cfg = (await api('GET', '/api/sales/terminal-config')).data;
+    assert.equal(cfg.store.logoUrl, base + logoPath);
+    assert.equal((await fetch(cfg.store.logoUrl)).status, 200);
+    assert.ok(cfg.store.name);
+    const empresa = (await api('GET', '/api/company')).data;
+    // como a tela: manda o cadastro inteiro, sem o logo
+    const campos = ['name', 'tradeName', 'document', 'phone', 'whatsapp', 'email', 'zip', 'address', 'number',
+      'complement', 'district', 'city', 'state', 'theme'];
+    await api('PATCH', '/api/company', Object.fromEntries(campos.map((k) => [k, empresa[k] ?? ''])));
+    assert.equal((await api('GET', '/api/company')).data.logoPath, logoPath);
+    await api('DELETE', '/api/company/logo');
+    // sem logo, volta para o da Blue
+    assert.equal((await api('GET', '/api/sales/terminal-config')).data.store.logoUrl, `${base}/icons/brand.png`);
+  });
+
   // ---------- pedido entregue vira venda ----------
   const formasCard = (await api('GET', '/api/company/payment-methods')).data.rows;
   const fDinheiro = formasCard.find((m: any) => m.type === 'dinheiro');
@@ -1665,6 +1807,68 @@ async function main() {
     assert.equal((await garcom('POST', '/api/menu/tables/0/orders', { items: [pizzaMesa] })).status, 400);
   });
 
+  await check('cliente pede pelo QR da mesa: cai na comanda igual ao garçom; sem o código certo não pede', async () => {
+    const { tableToken } = await import('../src/modules/menu');
+    const loja = (await db.company.findUniqueOrThrow({ where: { slug } })).id;
+    const mesa = (n: number) => `/api/public/stores/${slug}/tables/${n}`;
+    const pedir = (n: number, t: string) => fetch(base + mesa(n) + '/orders', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t, items: [pizzaMesa] }),
+    });
+    assert.equal((await pedir(8, 'chute')).status, 403);
+    assert.equal((await pedir(9, tableToken(loja, 8))).status, 403); // código de outra mesa
+    assert.equal((await pedir(11, tableToken(loja, 11))).status, 400); // mesa que não existe
+    assert.equal((await fetch(`${base}${mesa(8)}?t=chute`)).status, 403);
+
+    const r = await pedir(8, tableToken(loja, 8));
+    assert.equal(r.status, 201);
+    const pedido = await r.json();
+    assert.deepEqual([pedido.table, pedido.total], [8, 50]);
+    const comanda = (await garcom('GET', '/api/menu/tables')).data.orders.find((o: any) => o.id === pedido.id);
+    assert.deepEqual([comanda.table, comanda.paymentMethod, comanda.status, comanda.totalCents], [8, 'comanda', 'pending', 5000]);
+    assert.match(comanda.notes, /Pedido pelo QR da mesa/);
+    const conta = await (await fetch(`${base}${mesa(8)}?t=${tableToken(loja, 8)}`)).json();
+    assert.deepEqual([conta.table, conta.orders.length, conta.total], [8, 1, 50]);
+    assert.equal(conta.orders[0].items[0].quantity, 1);
+
+    // QR no painel: precisa do MENU_URL; a imagem é PNG com o endereço da mesa
+    const antes = process.env.MENU_URL;
+    delete process.env.MENU_URL;
+    assert.equal((await garcom('GET', '/api/menu/tables/8/qr.png')).status, 400);
+    process.env.MENU_URL = 'https://loja.exemplo/cardapio';
+    const qrs = (await garcom('GET', '/api/menu/tables/qr')).data;
+    assert.equal(qrs.tables[7].url, `https://loja.exemplo/cardapio/${slug}/mesa/8?t=${tableToken(loja, 8)}`);
+    const links = (await api('GET', '/api/menu/settings')).data;
+    assert.deepEqual([links.tableMenuUrl, links.deliveryUrl], [`https://loja.exemplo/cardapio/${slug}/mesa`, `https://loja.exemplo/delivery/${slug}`]);
+    const png = await garcom('GET', '/api/menu/tables/8/qr.png');
+    assert.equal(png.status, 200);
+    if (antes === undefined) delete process.env.MENU_URL; else process.env.MENU_URL = antes;
+    await api('POST', `/api/menu/orders/${pedido.id}/cancel`, { reason: 'Teste do QR' });
+  });
+
+  await check('cliente chama o garçom e pede a conta pelo QR: repetido não duplica; garçom vê e marca atendido', async () => {
+    const { tableToken } = await import('../src/modules/menu');
+    const loja = (await db.company.findUniqueOrThrow({ where: { slug } })).id;
+    const chamar = (n: number, t: string, kind: string) => fetch(`${base}/api/public/stores/${slug}/tables/${n}/calls`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t, kind }),
+    });
+    assert.equal((await chamar(7, 'chute', 'waiter')).status, 403);
+    assert.equal((await chamar(7, tableToken(loja, 7), 'gorjeta')).status, 400);
+    assert.equal((await chamar(7, tableToken(loja, 7), 'waiter')).status, 200);
+    assert.equal((await chamar(7, tableToken(loja, 7), 'waiter')).status, 200);
+    assert.equal((await chamar(7, tableToken(loja, 7), 'bill')).status, 200);
+    const conta = await (await fetch(`${base}/api/public/stores/${slug}/tables/7?t=${tableToken(loja, 7)}`)).json();
+    assert.deepEqual(conta.calls.map((c: any) => c.kind), ['waiter', 'bill']);
+    const abertos = async () => (await garcom('GET', '/api/menu/tables')).data.calls.map((c: any) => [c.table, c.kind]);
+    assert.deepEqual(await abertos(), [[7, 'waiter'], [7, 'bill']]);
+    const r = await garcom('POST', '/api/menu/tables/7/calls/attend', {});
+    assert.deepEqual([r.status, r.data.attended], [200, 2]);
+    assert.deepEqual(await abertos(), []);
+    const feito = await db.tableCall.findFirstOrThrow({ where: { companyId: loja, table: 7 } });
+    assert.equal(feito.attendedBy, 'Gui Garçom');
+    // mesa 3 pede a conta: fica aberto até fechar a conta (testado no fechamento)
+    assert.equal((await chamar(3, tableToken(loja, 3), 'bill')).status, 200);
+  });
+
   let pedidoItens = '';
   await check('cancelar: garçom só o pedido Novo, com motivo; servido só o caixa; tirar item refaz o total', async () => {
     const segundo = await garcom('POST', '/api/menu/tables/3/orders', { items: [{ ...pizzaMesa, quantity: 2 }] });
@@ -1734,6 +1938,7 @@ async function main() {
     assert.deepEqual(pedidos.map((o) => [o.status, o.saleId === sale.id]).sort(),
       [['cancelled', false], ['delivered', true], ['delivered', true], ['delivered', true]]);
     assert.deepEqual((await garcom('GET', '/api/menu/tables')).data.orders, []);
+    assert.deepEqual((await garcom('GET', '/api/menu/tables')).data.calls, []); // fechar a conta atende o pedido de conta
     assert.equal((await api('POST', '/api/menu/tables/3/close', { payments: [{ paymentMethodId: fDinheiro.id, amountCents: 100 }] })).status, 400);
 
     // cliente recusou a taxa: sai só o consumo
@@ -1746,6 +1951,123 @@ async function main() {
     assert.deepEqual(fechadas.map((x: any) => [x.table, x.totalCents, x.serviceCents, x.closedBy, x.orders.length]).sort(),
       [[3, 22000, 2000, 'Dona Ana', 3], [4, 5000, 0, 'Dona Ana', 1]]);
     assert.deepEqual((await api('GET', '/api/menu/tables/closed?date=2000-01-01')).data.rows, []);
+  });
+
+  // ---------- tela da cozinha ----------
+  console.log('\nCozinha');
+  const userCozinha = await db.user.create({
+    data: { companyId: ana.companyId, name: 'Cida Cozinha', email: 'cozinha@teste.com', passwordHash: await bcrypt.hash('senha1234', 4), role: 'cozinha' },
+  });
+  const cozinha = client(base, `lf_session=${await app.get(AuthService).sign(userCozinha)}`);
+  const naCozinha = async (id: string) => (await cozinha('GET', '/api/kitchen/orders')).data.rows.find((o: any) => o.id === id);
+
+  await check('perfil Cozinha: só a tela da cozinha; o resto do ERP é fechado', async () => {
+    assert.deepEqual((await cozinha('GET', '/api/auth/me')).data.permissions, ['cozinha.operar']);
+    for (const rota of ['/api/menu/orders', '/api/products', '/api/menu/tables', '/api/sales', '/api/users', '/api/stock/entries'])
+      assert.equal((await cozinha('GET', rota)).status, 403, rota);
+    // garçom não opera a cozinha
+    assert.equal((await garcom('GET', '/api/kitchen/orders')).status, 403);
+  });
+
+  await check('cozinha: aceita, marca pronto e desfaz; não entrega, não pula etapa e não vê preço', async () => {
+    const r = await garcom('POST', '/api/menu/tables/6/orders', { items: [pizzaMesa], notes: 'bem passada' });
+    const id = r.data.id;
+    const visto = await naCozinha(id);
+    assert.deepEqual([visto.status, visto.type, visto.table, visto.items[0].name], ['pending', 'table', 6, 'Calabresa (Grande)']);
+    assert.match(visto.notes, /bem passada/);
+    for (const campo of ['totalCents', 'customerPhone', 'address', 'pixQrCode']) assert.equal(campo in visto, false, campo);
+
+    const mover = (status: string) => cozinha('PATCH', `/api/kitchen/orders/${id}/status`, { status });
+    assert.equal((await mover('ready')).status, 409); // de Novo não pula para Pronto
+    const aceito = await mover('preparing');
+    assert.equal(aceito.status, 200, JSON.stringify(aceito.data));
+    assert.ok(aceito.data.acceptedAt);
+    assert.equal((await mover('preparing')).status, 409); // outra tela já aceitou
+    const pronto = await mover('ready');
+    assert.deepEqual([pronto.data.status, !!pronto.data.readyAt], ['ready', true]);
+    assert.equal((await mover('preparing')).data.status, 'preparing'); // desfazer
+    await mover('ready');
+    assert.equal((await mover('delivered')).status, 400); // servir é com o garçom/caixa
+    assert.equal((await cozinha('PATCH', `/api/menu/orders/${id}/status`, { status: 'delivered' })).status, 403);
+
+    // caixa serve: sai da tela da cozinha e fica na comanda
+    assert.equal((await api('PATCH', `/api/menu/orders/${id}/status`, { status: 'delivered' })).status, 200);
+    assert.equal(await naCozinha(id), undefined);
+    const gravado = await db.menuOrder.findUniqueOrThrow({ where: { id } });
+    assert.ok(gravado.acceptedAt! <= gravado.readyAt!);
+
+    // cancelado não volta para a cozinha
+    const outro = await garcom('POST', '/api/menu/tables/6/orders', { items: [pizzaMesa] });
+    await garcom('POST', `/api/menu/orders/${outro.data.id}/cancel`, { reason: 'Lançado errado' });
+    assert.equal(await naCozinha(outro.data.id), undefined);
+    assert.match((await cozinha('PATCH', `/api/kitchen/orders/${outro.data.id}/status`, { status: 'preparing' })).data.message, /cancelado/);
+    // outra empresa não vê nem mexe
+    assert.equal((await outra('GET', '/api/kitchen/orders')).data.rows.some((o: any) => o.id === id), false);
+    assert.equal((await outra('PATCH', `/api/kitchen/orders/${id}/status`, { status: 'preparing' })).status, 404);
+  });
+
+  await check('praças: Cozinha padrão já existe; categoria e produto escolhem; cada praça tem a sua ficha', async () => {
+    const [padrao] = (await cozinha('GET', '/api/kitchen/stations')).data.rows;
+    assert.deepEqual([padrao.name, padrao.isDefault], ['Cozinha', true]);
+    assert.equal((await api('PATCH', `/api/kitchen/stations/${padrao.id}`, { active: false })).status, 400);
+    assert.equal((await cozinha('POST', '/api/kitchen/stations', { name: 'Bar' })).status, 403); // só quem gerencia a empresa
+    const bar = (await api('POST', '/api/kitchen/stations', { name: 'Bar' })).data;
+    assert.equal((await api('POST', '/api/kitchen/stations', { name: 'bar' })).status, 400);
+    // praça de outra empresa não serve
+    assert.equal((await outra('POST', '/api/products', { name: 'X', priceCents: 100, stationId: bar.id })).status, 400);
+
+    // Bebidas vai para o Bar; a lata não vai para tela nenhuma; a batata, mesmo em Bebidas, força a Cozinha
+    await api('PATCH', `/api/categories/${cat.data.id}`, { name: 'Bebidas', stationId: bar.id });
+    const novo = (body: object) => api('POST', '/api/products', { priceCents: 1000, categoryId: cat.data.id, menuVisible: true, ...body });
+    const chopp = (await novo({ name: 'Chopp' })).data;
+    const lata = (await novo({ name: 'Lata', kitchenSkip: true })).data;
+    const batata = (await novo({ name: 'Batata', stationId: padrao.id })).data;
+    const linha = (p: any) => ({ product_id: p.id, quantity: 1 });
+
+    const r = await garcom('POST', '/api/menu/tables/7/orders', { items: [pizzaMesa, linha(chopp), linha(lata), linha(batata)] });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    const pid = r.data.id;
+    const gravado = await db.menuOrder.findUniqueOrThrow({ where: { id: pid }, include: { tickets: true } });
+    assert.deepEqual(JSON.parse(gravado.items).map((i: any) => i.stationId), [padrao.id, bar.id, null, padrao.id]);
+    assert.equal(gravado.tickets.length, 2);
+
+    const naPraca = async (st: string) => (await cozinha('GET', `/api/kitchen/orders?station=${st}`)).data.rows.find((o: any) => o.id === pid);
+    const noBar = await naPraca(bar.id);
+    const naCoz = await naPraca(padrao.id);
+    assert.deepEqual(noBar.items.map((i: any) => i.name), ['Chopp']);
+    assert.deepEqual(naCoz.items.map((i: any) => i.name), ['Calabresa (Grande)', 'Batata']);
+    assert.deepEqual(noBar.stations.map((s: any) => [s.name, s.status]), [['Bar', 'pending'], ['Cozinha', 'pending']]);
+
+    // o Bar termina primeiro: o pedido só fica pronto quando a Cozinha também termina
+    const ficha = (o: any, status: string) => cozinha('PATCH', `/api/kitchen/tickets/${o.ticketId}/status`, { status });
+    await ficha(noBar, 'preparing');
+    assert.equal((await ficha(noBar, 'ready')).data.status, 'ready');
+    assert.equal((await db.menuOrder.findUniqueOrThrow({ where: { id: pid } })).status, 'preparing');
+    assert.equal((await ficha(noBar, 'ready')).status, 409); // outra tela já marcou
+    await ficha(naCoz, 'preparing');
+    await ficha(naCoz, 'ready');
+    const pronto = await db.menuOrder.findUniqueOrThrow({ where: { id: pid } });
+    assert.deepEqual([pronto.status, !!pronto.readyAt], ['ready', true]);
+    // desfazer na Cozinha: o pedido volta para "Em preparo"
+    await ficha(naCoz, 'preparing');
+    assert.equal((await db.menuOrder.findUniqueOrThrow({ where: { id: pid } })).status, 'preparing');
+
+    // só lata: não passa pela cozinha
+    const soLata = await garcom('POST', '/api/menu/tables/7/orders', { items: [linha(lata)] });
+    assert.equal((await cozinha('GET', '/api/kitchen/orders')).data.rows.some((o: any) => o.id === soLata.data.id), false);
+
+    // caixa tira o chopp: o Bar perde a ficha; a Cozinha marca pronto e o pedido fica pronto
+    const outroPedido = await garcom('POST', '/api/menu/tables/7/orders', { items: [pizzaMesa, linha(chopp)] });
+    await api('POST', `/api/menu/orders/${outroPedido.data.id}/items/1/cancel`, { reason: 'Não pediu' });
+    assert.equal(await db.kitchenTicket.count({ where: { orderId: outroPedido.data.id } }), 1);
+
+    // caixa marca o pedido inteiro como pronto pela tela de pedidos: as fichas acompanham
+    assert.equal((await api('PATCH', `/api/menu/orders/${pid}/status`, { status: 'ready' })).status, 200);
+    assert.deepEqual((await db.kitchenTicket.findMany({ where: { orderId: pid } })).map((t) => t.status), ['ready', 'ready']);
+    // praça desativada: item novo cai na Cozinha padrão
+    await api('PATCH', `/api/kitchen/stations/${bar.id}`, { active: false });
+    const semBar = await garcom('POST', '/api/menu/tables/7/orders', { items: [linha(chopp)] });
+    assert.equal(JSON.parse((await db.menuOrder.findUniqueOrThrow({ where: { id: semBar.data.id } })).items)[0].stationId, padrao.id);
   });
 
   await app.close();

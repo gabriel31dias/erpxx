@@ -1058,6 +1058,8 @@ async function boot() {
   try {
     state.me = await get('/auth/me');
   } catch { return; }
+  // perfil Cozinha só enxerga a tela da cozinha
+  if (state.me.user.role === 'cozinha') return location.replace('/cozinha.html');
   if (!state.me.permissions.includes('pdv.acessar')) {
     root.replaceChildren(h('div', { class: 'lf-pdv-card m-4' }, 'Seu perfil não tem acesso ao PDV.'));
     return;

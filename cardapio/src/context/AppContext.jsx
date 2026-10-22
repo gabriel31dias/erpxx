@@ -1,17 +1,28 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { fetchMenu, createOrder, fetchOrders, waiterApi, pathParts, pub } from '../lib/api';
+import { fetchMenu, createOrder, fetchOrders, waiterApi, dineApi, pathParts, pub } from '../lib/api';
 import { useTables } from '../garcom/useTables';
 
 const AppContext = createContext();
 
-// slug da loja: /cardapio/don-beef ou ?loja=don-beef
-const SLUG = (new URLSearchParams(location.search).get('loja') || pathParts()[0] || '').toLowerCase();
+const QUERY = new URLSearchParams(location.search);
+const PARTS = pathParts();
+// slug da loja: /delivery/don-beef, /cardapio/don-beef (link antigo do delivery) ou ?loja=don-beef
+const SLUG = (QUERY.get('loja') || (PARTS[0] === 'delivery' ? PARTS[1] : PARTS[0]) || '').toLowerCase();
+/**
+ * Cardápio da mesa: /cardapio/<slug>/mesa/<n>?t=<código do QR>. O pedido vai para a comanda da mesa
+ * (igual ao do garçom) e a conta fecha no caixa. Sem número (/cardapio/<slug>/mesa) só mostra o cardápio.
+ */
+const DINE = PARTS[0] !== 'delivery' && PARTS[1] === 'mesa'
+  ? { table: Number(PARTS[2]) > 0 ? Number(PARTS[2]) : null, code: QUERY.get('t') || '' }
+  : null;
+// carrinho da mesa não se mistura com o do delivery no mesmo celular
+const KEY = DINE ? `${SLUG}:mesa` : SLUG;
 
 // localStorage pode faltar (aba anônima, bloqueado): nunca quebra o app
 const store = {
   get: (key, fallback) => {
     try {
-      const v = localStorage.getItem(`${SLUG}:${key}`);
+      const v = localStorage.getItem(`${KEY}:${key}`);
       return v ? JSON.parse(v) : fallback;
     } catch {
       return fallback;
@@ -19,7 +30,7 @@ const store = {
   },
   set: (key, value) => {
     try {
-      localStorage.setItem(`${SLUG}:${key}`, JSON.stringify(value));
+      localStorage.setItem(`${KEY}:${key}`, JSON.stringify(value));
     } catch {
       /* sem storage */
     }
@@ -79,6 +90,7 @@ const toApiLine = (i) => ({
 const STATUS = {
   pending: { label: 'Recebido', code: 'preparing' },
   preparing: { label: 'Em preparação', code: 'preparing' },
+  ready: { label: 'Pronto', code: 'preparing' },
   delivering: { label: 'Saiu para entrega', code: 'preparing' },
   delivered: { label: 'Entregue', code: 'delivered' },
   cancelled: { label: 'Cancelado', code: 'cancelled' },
@@ -104,6 +116,7 @@ export function AppProvider({ children, waiter = null }) {
   // dados da loja
   const [menu, setMenu] = useState({ loading: true, error: null, store: null, categories: [], products: [] });
 
+  // garçom abre nas mesas; cliente (delivery ou mesa) abre na home da loja, com banner e logo
   const start = waiter ? 'mesas' : 'home';
   const [currentScreen, setCurrentScreen] = useState(start);
   const [history, setHistory] = useState([start]);
@@ -157,7 +170,7 @@ export function AppProvider({ children, waiter = null }) {
         );
         if (!d.store.accepts_delivery) setDeliveryType('pickup');
         setSelectedPayment(d.store.whatsapp_enabled ? 'whatsapp' : 'pix');
-        document.title = waiter ? `Garçom · ${d.store.name}` : d.store.name;
+        document.title = waiter ? `Garçom · ${d.store.name}` : DINE?.table ? `Mesa ${DINE.table} · ${d.store.name}` : d.store.name;
       })
       .catch((e) => setMenu((m) => ({ ...m, loading: false, error: e.message })));
   }, []);
@@ -179,6 +192,7 @@ export function AppProvider({ children, waiter = null }) {
     else if (['meus_pedidos', 'rastreamento'].includes(screenKey)) setActiveTab('pedidos');
     else if (['perfil', 'favoritos', 'configuracoes', 'suporte', 'sobre'].includes(screenKey)) setActiveTab('perfil');
     else if (['mesas', 'comanda'].includes(screenKey)) setActiveTab(screenKey);
+    else if (screenKey === 'minha_mesa') setActiveTab('comanda');
     window.scrollTo(0, 0);
   };
 
@@ -211,6 +225,8 @@ export function AppProvider({ children, waiter = null }) {
 
   /** extra: { size, flavors: [produtos], options: [{ group, name, price }] } */
   const addToCart = (product, quantity = 1, additionals = [], extra = {}) => {
+    // cardápio aberto sem mesa (link do painel) é só para ver
+    if (DINE && !DINE.table) return setToast({ id: Date.now(), text: 'Para pedir, leia o QR Code da mesa' });
     const { size = null, flavors = [], options = [] } = extra;
     const priced = priceLine({ product, size, flavors, additionals, options });
     if (!priced) return;
@@ -245,7 +261,7 @@ export function AppProvider({ children, waiter = null }) {
 
   const storeInfo = menu.store;
   const subtotal = cart.reduce((sum, item) => sum + item.itemTotal, 0);
-  const currentDeliveryFee = waiter || deliveryType === 'pickup' || !storeInfo ? 0 : storeInfo.delivery_fee; // mesa não paga entrega
+  const currentDeliveryFee = waiter || DINE || deliveryType === 'pickup' || !storeInfo ? 0 : storeInfo.delivery_fee; // mesa não paga entrega
   const total = subtotal + currentDeliveryFee;
 
   const toggleFavorite = (productId) =>
@@ -292,10 +308,37 @@ export function AppProvider({ children, waiter = null }) {
   const mesas = useTables(waiter, { cart, clearCart, toApiLine });
   const notify = (text) => setToast({ id: Date.now(), text });
 
+  // cliente na mesa: manda para a comanda pelo QR e acompanha o que a mesa já pediu
+  const [tab, setTab] = useState({ orders: [], total: 0, calls: [] });
+  const refreshTab = async () => {
+    if (!DINE?.table) return;
+    const r = await dineApi.tab(SLUG, DINE.table, DINE.code);
+    setTab(r);
+    return r;
+  };
+  const dine = DINE && {
+    table: DINE.table,
+    tab,
+    refreshTab,
+    sendToTable: async (notes) => {
+      await dineApi.order(SLUG, DINE.table, { t: DINE.code, items: cart.map(toApiLine), notes: notes || undefined });
+      clearCart();
+      await refreshTab().catch(() => {});
+    },
+    /** chama o garçom (waiter) ou pede a conta (bill); o garçom vê na hora no app e no ERP */
+    callStaff: async (kind) => {
+      const call = await dineApi.call(SLUG, DINE.table, { t: DINE.code, kind });
+      setTab((t) => ({ ...t, calls: [...(t.calls || []).filter((c) => c.kind !== kind), call] }));
+      notify(kind === 'bill' ? 'Pedimos a conta. O garçom já vem.' : 'Garçom chamado. Já vamos até a mesa.');
+    },
+  };
+
   return (
     <AppContext.Provider
       value={{
         ...mesas,
+        ...dine,
+        dine: !!DINE,
         waiter,
         notify,
         slug: SLUG,

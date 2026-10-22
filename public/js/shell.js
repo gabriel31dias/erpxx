@@ -280,6 +280,11 @@ export async function boot() {
   }
   ctx.me = me;
   ctx.can = (perm) => me.permissions.includes(perm);
+  // perfil Cozinha só enxerga a tela da cozinha
+  if (me.user.role === 'cozinha') {
+    location.replace('/cozinha.html');
+    return;
+  }
 
   if (me.company.theme === 'dark') document.body.classList.add('dark-only');
   if (!me.company.onboarded && page !== 'onboarding') {

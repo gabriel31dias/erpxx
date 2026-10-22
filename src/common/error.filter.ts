@@ -14,7 +14,9 @@ export class HttpErrorFilter implements ExceptionFilter {
       const status = exception.getStatus();
       const body = exception.getResponse() as any;
       const message = Array.isArray(body?.message) ? body.message[0] : body?.message ?? exception.message;
-      return res.status(status).json({ statusCode: status, message });
+      // campos extras que a rota pôs de propósito no erro (ex.: reason do ingresso) seguem para o cliente
+      const { statusCode, message: _m, error, ...extra } = typeof body === 'object' && body ? body : {} as any;
+      return res.status(status).json({ statusCode: status, message, ...extra });
     }
 
     this.logger.error(`${req.method} ${req.url}`, exception instanceof Error ? exception.stack : String(exception));

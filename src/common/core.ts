@@ -70,6 +70,8 @@ export const DEFAULT_SETTINGS = {
   crediarioIntervalDays: 30, // dias entre a venda e cada parcela do crediário
   crediarioGraceDays: 0, // atraso tolerado antes de barrar nova compra no crediário
   visitRadiusM: 150, // check-in mais longe que isso do cliente vira alerta "fora do local"
+  ticketMode: false, // bilheteria: a venda vira ingresso e a maquininha queima na entrada
+  cloverFeePct: 0, // taxa (%) cobrada pela maquininha Clover sobre o valor da venda
 };
 export type Settings = typeof DEFAULT_SETTINGS;
 

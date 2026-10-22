@@ -1,5 +1,5 @@
 // Empresa: dados cadastrais, filiais, PDVs e formas de pagamento numa tela só.
-import { del, get, patch, post } from '../api.js';
+import { del, get, patch, post, uploadImage } from '../api.js';
 import { pageTitle } from '../shell.js';
 import { mount,
   card, centsToInput, confirmAction, dataList, field, h, icon, input, modal, refreshIcons, select,
@@ -24,7 +24,6 @@ export default async function render({ content, can }) {
     district: input({ value: empresa.district ?? '' }),
     city: input({ value: empresa.city ?? '' }),
     state: input({ value: empresa.state ?? '', maxlength: '2' }),
-    logoPath: input({ value: empresa.logoPath ?? '', placeholder: 'https://…' }),
     theme: select([
       { value: 'light', label: 'Claro', selected: empresa.theme === 'light' },
       { value: 'dark', label: 'Escuro', selected: empresa.theme === 'dark' },
@@ -47,8 +46,44 @@ export default async function render({ content, can }) {
     field('Cidade', f.city, { col: 'col-6 col-md-4' }),
     field('UF', f.state, { col: 'col-6 col-md-2' }),
     field('Tema', f.theme, { col: 'col-6 col-md-2' }),
-    field('Logo (URL)', f.logoPath, { col: 'col-12 col-md-6' }),
     h('div', { class: 'col-12 text-end' }, salvar));
+
+  // ---------- logo: grava na hora, a maquininha e o comprovante usam ----------
+  let logoAtual = empresa.logoPath || '';
+  const previaLogo = h('img', { alt: 'Logo', style: 'max-height:96px;max-width:100%;border-radius:6px' });
+  const semLogo = h('span', { class: 'txt-secondary f-12' }, 'Sem logo');
+  const arquivoLogo = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', class: 'd-none' });
+  const enviarLogo = h('button', { type: 'button', class: 'btn btn-sm btn-outline-primary', onclick: () => arquivoLogo.click() }, 'Enviar logo');
+  const removerLogo = h('button', { type: 'button', class: 'btn btn-sm btn-outline-danger' }, 'Remover');
+  const mostrarLogo = () => {
+    previaLogo.src = logoAtual;
+    previaLogo.classList.toggle('d-none', !logoAtual);
+    semLogo.classList.toggle('d-none', !!logoAtual);
+    removerLogo.classList.toggle('d-none', !logoAtual);
+  };
+  arquivoLogo.onchange = async () => {
+    if (!arquivoLogo.files[0]) return;
+    enviarLogo.disabled = true;
+    try {
+      logoAtual = await uploadImage(arquivoLogo.files[0], '/company/logo');
+      mostrarLogo();
+      toast('Logo salvo.');
+    } catch (err) { toast(err.message, 'error'); } finally { enviarLogo.disabled = false; arquivoLogo.value = ''; }
+  };
+  removerLogo.onclick = async () => {
+    try {
+      await del('/company/logo');
+      logoAtual = '';
+      mostrarLogo();
+      toast('Logo removido.');
+    } catch (err) { toast(err.message, 'error'); }
+  };
+  mostrarLogo();
+  form.prepend(h('div', { class: 'col-12' },
+    h('div', { class: 'form-label' }, 'Logo da loja'),
+    h('div', { class: 'mb-2', style: 'min-height:96px' }, previaLogo, semLogo),
+    h('div', { class: 'd-flex gap-2' }, enviarLogo, removerLogo, arquivoLogo),
+    h('div', { class: 'form-text' }, 'JPG, PNG ou WEBP até 3 MB. Aparece no comprovante e na maquininha. Salva ao enviar.')));
 
   form.onsubmit = async (e) => {
     e.preventDefault();

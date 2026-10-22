@@ -3,7 +3,7 @@ import { Home, FileText, ShoppingBag, Receipt, MoreHorizontal, LayoutGrid } from
 import { useApp } from '../context/AppContext';
 
 export function BottomNav({ activeTabOverride }) {
-  const { activeTab, setActiveTab, navigateTo, cart, waiter, table } = useApp();
+  const { activeTab, setActiveTab, navigateTo, cart, waiter, dine, table } = useApp();
   const current = activeTabOverride || activeTab;
 
   const totalCartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
@@ -13,6 +13,13 @@ export function BottomNav({ activeTabOverride }) {
     { id: 'home', label: 'Cardápio', icon: FileText, screen: 'categoria' },
     { id: 'meupedido', label: 'Pedido', icon: ShoppingBag, screen: 'carrinho', badge: totalCartCount || undefined },
     { id: 'comanda', label: table ? `Mesa ${table}` : 'Comanda', icon: Receipt, screen: 'comanda' },
+  ] : dine ? [
+    { id: 'home', label: 'Início', icon: Home, screen: 'home' },
+    { id: 'cardapio', label: 'Cardápio', icon: FileText, screen: 'categoria' },
+    ...(table ? [
+      { id: 'meupedido', label: 'Pedido', icon: ShoppingBag, screen: 'carrinho', badge: totalCartCount || undefined },
+      { id: 'comanda', label: `Mesa ${table}`, icon: Receipt, screen: 'minha_mesa' },
+    ] : []),
   ] : [
     { id: 'home', label: 'Início', icon: Home, screen: 'home' },
     { id: 'cardapio', label: 'Cardápio', icon: FileText, screen: 'categoria' },

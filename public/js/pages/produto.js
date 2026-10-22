@@ -65,11 +65,18 @@ const ORIGENS = [
 ];
 const pctToBp = (v) => { const n = parseFloat(String(v).replace(',', '.')); return Number.isFinite(n) ? Math.round(n * 100) : undefined; };
 const bpToPct = (bp) => (bp == null ? '' : String(bp / 100).replace('.', ','));
+// ISO do servidor -> valor do <input type="datetime-local"> no fuso do navegador
+const isoToLocal = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+};
 
 export default async function render({ content, can, branchId }) {
   const id = new URLSearchParams(location.search).get('id');
-  const [{ rows: categorias }, detalhe] = await Promise.all([
+  const [{ rows: categorias }, { rows: pracas }, detalhe] = await Promise.all([
     get('/categories'),
+    get('/kitchen/stations'),
     id ? get(`/products/${id}`, { branchId }) : Promise.resolve(null),
   ]);
   const p = detalhe?.product ?? {};
@@ -100,6 +107,7 @@ export default async function render({ content, can, branchId }) {
       { value: 'false', label: 'Inativo', selected: p.active === false },
     ]),
     initialStock: input({ inputmode: 'decimal', value: '0' }),
+    addStock: input({ inputmode: 'decimal', value: '', placeholder: '0' }),
     // ---- fiscais (NF-e) ----
     ncm: input({ value: p.ncm ?? '', placeholder: '8 dígitos', inputmode: 'numeric' }),
     cest: input({ value: p.cest ?? '', placeholder: '7 dígitos (se ST)', inputmode: 'numeric' }),
@@ -121,7 +129,35 @@ export default async function render({ content, can, branchId }) {
     ]),
     oldPrice: moneyInput({ value: p.oldPriceCents == null ? '' : centsToInput(p.oldPriceCents), placeholder: 'sem promoção' }),
     position: input({ type: 'number', value: p.position ?? 0 }),
+    // ---- bilheteria ----
+    eventName: input({ value: p.eventName ?? '', placeholder: 'Ex.: Show de Aniversário' }),
+    eventDate: input({ type: 'datetime-local', value: isoToLocal(p.eventDate) }),
+    ticketType: input({ value: p.ticketType ?? '', placeholder: 'Ex.: Inteira, Meia, VIP' }),
+    ticketBox: select([
+      { value: 'false', label: 'Não', selected: !p.ticketBox },
+      { value: 'true', label: 'Sim', selected: !!p.ticketBox },
+    ]),
+    boxNumber: input({ value: p.boxNumber ?? '', placeholder: 'Ex.: 05' }),
+    tableNumber: input({ value: p.tableNumber ?? '', placeholder: 'Ex.: 12' }),
+    // ---- cozinha: '' herda da categoria; 'skip' não vai para tela nenhuma ----
+    station: select([
+      { value: '', label: 'Herdar da categoria', selected: !p.stationId && !p.kitchenSkip },
+      ...pracas.map((s) => ({ value: s.id, label: s.name, selected: !p.kitchenSkip && s.id === p.stationId })),
+      { value: 'skip', label: 'Não vai para a cozinha', selected: !!p.kitchenSkip },
+    ]),
   };
+  const pracaHerdada = h('div', { class: 'form-text' });
+  const mostrarHerdada = () => {
+    const cat = categorias.find((c) => c.id === f.categoryId.value);
+    const nome = pracas.find((s) => s.id === cat?.stationId)?.name ?? pracas.find((s) => s.isDefault)?.name ?? 'Cozinha';
+    pracaHerdada.textContent = f.station.value === 'skip'
+      ? 'O item não aparece em nenhuma tela de preparo: o balcão/garçom só entrega.'
+      : f.station.value ? 'Este produto vai para a praça escolhida, qualquer que seja a categoria.'
+        : `Pela categoria, vai para: ${nome}.`;
+  };
+  f.station.onchange = mostrarHerdada;
+  f.categoryId.addEventListener('change', mostrarHerdada);
+  mostrarHerdada();
   const menu = {
     sizes: linhas(opcoes.sizes ?? [], { nome: 'Ex.: Grande', vazio: 'Sem tamanhos: vale o preço de venda.' }),
     additionals: linhas(opcoes.additionals ?? [], { nome: 'Ex.: Bacon' }),
@@ -166,7 +202,13 @@ export default async function render({ content, can, branchId }) {
     field('Estoque mínimo', f.minStock, { col: 'col-6 col-md-3' }),
     field('Estoque máximo', f.maxStock, { col: 'col-6 col-md-3' }),
     field('Situação', f.active, { col: 'col-6 col-md-3' }),
-    id ? null : field('Estoque inicial', f.initialStock, { col: 'col-6 col-md-3', help: 'Gera uma movimentação de entrada.' }),
+    id ? null : field('Quantidade em estoque (entrada inicial)', f.initialStock, {
+      col: 'col-6 col-md-3', help: 'Ao cadastrar, gera a entrada automaticamente em Estoque > Entradas, com o custo informado.',
+    }),
+    id && can('estoque.entrada') ? field('Adicionar ao estoque (nova entrada)', f.addStock, {
+      col: 'col-6 col-md-3',
+      help: `Hoje: ${fmtQty(detalhe.product.stock, p.unit)}. Ao salvar, soma essa quantidade e gera a entrada em Estoque > Entradas.`,
+    }) : null,
     field('Imagem (URL)', f.imageUrl, { col: 'col-12 col-md-6' }),
     h('div', { class: 'col-12 col-md-6 d-flex align-items-end gap-2' }, editavel ? enviarFoto : null, foto),
     field('Descrição', f.description, { col: 'col-12' }),
@@ -188,6 +230,21 @@ export default async function render({ content, can, branchId }) {
     h('div', { class: 'col-6 col-md-3' }),
     field('Peso líquido (kg)', f.netWeight, { col: 'col-6 col-md-3' }),
     field('Peso bruto (kg)', f.grossWeight, { col: 'col-6 col-md-3' }),
+    // ---- Cozinha ----
+    h('div', { class: 'col-12 mt-2' }, h('hr', {}),
+      h('h6', { class: 'txt-primary mb-0' }, 'Cozinha'),
+      h('small', { class: 'txt-secondary' }, 'Em qual tela de preparo (praça) o item aparece quando entra um pedido do cardápio ou do garçom.')),
+    h('div', { class: 'col-12 col-md-6' }, h('label', { class: 'form-label' }, 'Praça da cozinha'), f.station, pracaHerdada),
+    // ---- Bilheteria ----
+    h('div', { class: 'col-12 mt-2' }, h('hr', {}),
+      h('h6', { class: 'txt-primary mb-0' }, 'Bilheteria (ingresso)'),
+      h('small', { class: 'txt-secondary' }, 'Opcional. Usado no modo bilheteria: a maquininha imprime esses dados no ingresso.')),
+    field('Nome do evento', f.eventName, { col: 'col-12 col-md-6', help: 'Aparece no topo do ingresso.' }),
+    field('Data do evento', f.eventDate, { col: 'col-6 col-md-3', help: 'Data e hora de início.' }),
+    field('Tipo de ingresso', f.ticketType, { col: 'col-6 col-md-3', help: 'Ex.: Inteira, Meia-entrada, VIP, Pista.' }),
+    field('Camarote', f.ticketBox, { col: 'col-6 col-md-3', help: 'Sim, o ingresso sai marcado como camarote.' }),
+    field('Número do camarote', f.boxNumber, { col: 'col-6 col-md-3', help: 'Impresso no ingresso quando é camarote.' }),
+    field('Mesa', f.tableNumber, { col: 'col-6 col-md-3', help: 'Número da mesa, quando o lugar é numerado.' }),
     // ---- Cardápio digital ----
     h('div', { class: 'col-12 mt-2' }, h('hr', {}),
       h('h6', { class: 'txt-primary mb-0' }, 'Cardápio digital'),
@@ -236,16 +293,28 @@ export default async function render({ content, can, branchId }) {
         cofinsAliqBp: pctToBp(f.cofinsAliq.value),
         netWeight: f.netWeight.value ? parseQty(f.netWeight.value) : undefined,
         grossWeight: f.grossWeight.value ? parseQty(f.grossWeight.value) : undefined,
-        ...(id ? {} : { initialStock: parseQty(f.initialStock.value) }),
+        ...(id ? { addStock: f.addStock.value.trim() ? parseQty(f.addStock.value) : undefined }
+          : { initialStock: parseQty(f.initialStock.value) }),
         // cardápio digital
         menuVisible: f.menuVisible.value === 'true',
         oldPriceCents: f.oldPrice.value.trim() ? moneyToCents(f.oldPrice.value) : null,
         position: Number(f.position.value) || 0,
         menuOptions: { sizes: menu.sizes.value(), additionals: menu.additionals.value(), optionGroups: menu.optionGroups.value() },
+        // cozinha
+        stationId: f.station.value && f.station.value !== 'skip' ? f.station.value : null,
+        kitchenSkip: f.station.value === 'skip',
+        // bilheteria
+        eventName: f.eventName.value.trim(),
+        eventDate: f.eventDate.value ? new Date(f.eventDate.value).toISOString() : undefined,
+        ticketType: f.ticketType.value.trim(),
+        ticketBox: f.ticketBox.value === 'true',
+        boxNumber: f.boxNumber.value.trim(),
+        tableNumber: f.tableNumber.value.trim(),
       };
       const saved = id ? await patch(`/products/${id}`, body) : await post('/products', body);
       toast('Produto salvo.');
-      if (!id) location.href = `/produto.html?id=${saved.id}`;
+      // com entrada, recarrega para atualizar saldo e movimentações
+      if (!id || body.addStock) location.href = `/produto.html?id=${saved.id}`;
     } catch (err) {
       toast(err.message, 'error');
     } finally {

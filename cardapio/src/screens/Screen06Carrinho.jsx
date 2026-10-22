@@ -14,6 +14,7 @@ export function Screen06Carrinho() {
     storeInfo,
     setSelectedPayment,
     waiter,
+    dine,
     table,
     sendToTable,
     notify,
@@ -24,13 +25,13 @@ export function Screen06Carrinho() {
 
   /** garçom: manda o pedido para a cozinha na comanda da mesa */
   const send = async () => {
-    if (!table) return navigateTo('mesas');
+    if (!table) return dine ? setError('Para pedir, leia o QR Code da mesa.') : navigateTo('mesas');
     setSending(true);
     setError('');
     try {
       await sendToTable(notes.trim());
       notify(`Pedido enviado · Mesa ${table}`);
-      navigateTo('comanda');
+      navigateTo(dine ? 'minha_mesa' : 'comanda');
     } catch (e) {
       setError(e.message);
     } finally {
@@ -146,7 +147,7 @@ export function Screen06Carrinho() {
               <span className="font-bold text-slate-900">{brl(subtotal)}</span>
             </div>
 
-            {!waiter && (
+            {!waiter && !dine && (
               <div className="flex items-center justify-between text-slate-500 font-medium">
                 <span>Entrega</span>
                 <span className="font-bold text-slate-900">
@@ -166,7 +167,7 @@ export function Screen06Carrinho() {
       {/* Bottom Actions */}
       {cart.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 max-w-[440px] mx-auto p-4 bg-white border-t border-slate-100 shrink-0 z-30 shadow-[0_-4px_20px_rgba(0,0,0,0.06)] space-y-2">
-          {waiter && (
+          {(waiter || dine) && (
             <>
               <input
                 value={notes}
@@ -187,10 +188,10 @@ export function Screen06Carrinho() {
               </button>
             </>
           )}
-          {!waiter && !storeInfo.is_open && (
+          {!waiter && !dine && !storeInfo.is_open && (
             <p className="text-center text-xs font-semibold text-red-500">Loja fechada agora — volte no horário {storeInfo.hours}</p>
           )}
-          {!waiter && storeInfo.whatsapp_enabled && (
+          {!waiter && !dine && storeInfo.whatsapp_enabled && (
             <button
               disabled={!storeInfo.is_open}
               onClick={() => checkout('whatsapp')}
@@ -201,7 +202,7 @@ export function Screen06Carrinho() {
             </button>
           )}
 
-          {!waiter && storeInfo.pix_enabled && (
+          {!waiter && !dine && storeInfo.pix_enabled && (
             <button
               disabled={!storeInfo.is_open}
               onClick={() => checkout('pix')}

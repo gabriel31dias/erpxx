@@ -6,6 +6,10 @@ import { mount, card, confirmAction, dataList, field, h, icon, input, modal, ref
 export default async function render({ content, can }) {
   const editavel = can('categoria.gerenciar');
   const lista = h('div', {});
+  // praças da cozinha (Cozinha, Bar…): a primeira é a padrão
+  const { rows: pracas } = await get('/kitchen/stations');
+  const padrao = pracas.find((p) => p.isDefault);
+  const nomePraca = (id) => pracas.find((p) => p.id === id)?.name ?? padrao?.name ?? 'Cozinha';
 
   function formulario(row = {}) {
     const nome = input({ value: row.name ?? '', required: true });
@@ -14,6 +18,10 @@ export default async function render({ content, can }) {
       value: String(n), label: n === 1 ? 'Não (1 sabor)' : `Até ${n} sabores`, selected: (row.maxFlavors ?? 1) === n,
     })));
     const ordem = input({ type: 'number', value: row.position ?? 0 });
+    const praca = select(pracas.map((p) => ({
+      value: p.isDefault ? '' : p.id, label: p.isDefault ? `${p.name} (padrão)` : p.name,
+      selected: p.isDefault ? !row.stationId : p.id === row.stationId,
+    })));
     const ativo = select([
       { value: 'true', label: 'Ativa', selected: row.active !== false },
       { value: 'false', label: 'Inativa', selected: row.active === false },
@@ -26,7 +34,10 @@ export default async function render({ content, can }) {
         field('Descrição', descricao, { col: 'col-12' }),
         field('Situação', ativo, { col: 'col-12' }),
         field('Meio a meio no cardápio', sabores, { col: 'col-6' }),
-        field('Ordem no cardápio', ordem, { col: 'col-6' })),
+        field('Ordem no cardápio', ordem, { col: 'col-6' }),
+        field('Praça da cozinha', praca, {
+          col: 'col-12', help: 'Onde os produtos desta categoria são preparados. Dá para mudar produto a produto no cadastro dele.',
+        })),
       footer: [h('button', { class: 'btn btn-light', 'data-bs-dismiss': 'modal' }, 'Cancelar'), salvar],
     });
     salvar.onclick = async () => {
@@ -35,6 +46,7 @@ export default async function render({ content, can }) {
           name: nome.value.trim(), description: descricao.value.trim() || undefined,
           active: ativo.value === 'true',
           maxFlavors: Number(sabores.value), position: Number(ordem.value) || 0,
+          stationId: praca.value || null,
         };
         row.id ? await patch(`/categories/${row.id}`, body) : await post('/categories', body);
         m.close();
@@ -61,6 +73,7 @@ export default async function render({ content, can }) {
       columns: [
         { label: 'Nome', cell: (c) => h('strong', {}, c.name) },
         { label: 'Descrição', cell: (c) => c.description || '—' },
+        { label: 'Praça', cell: (c) => nomePraca(c.stationId) },
         { label: 'Produtos', className: 'text-end', cell: (c) => String(c.products) },
         {
           label: 'Situação',

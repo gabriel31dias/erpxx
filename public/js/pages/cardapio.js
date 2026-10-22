@@ -190,9 +190,12 @@ export default async function render({ content, can }) {
     cover: imagem('Foto de capa', 'coverUrl', s.coverUrl),
   };
 
-  const link = s.menuUrl
-    ? h('a', { href: s.menuUrl, target: '_blank', rel: 'noopener', class: 'btn btn-outline-primary' }, 'Abrir cardápio')
-    : null;
+  // cardápio = o da mesa (só ver, sem QR não pede); delivery = pedido para entregar/retirar
+  const abrir = (href, texto) => h('a', { href, target: '_blank', rel: 'noopener', class: 'btn btn-outline-primary' }, texto);
+  // app do garçom: mesmo domínio do ERP, entra com o login da equipe
+  const link = h('div', { class: 'd-flex flex-wrap gap-2' },
+    s.tableMenuUrl ? [abrir(s.tableMenuUrl, 'Abrir cardápio'), abrir(s.deliveryUrl, 'Abrir delivery')] : null,
+    abrir('/garcom/', 'Abrir app do garçom'));
   const salvar = h('button', { class: 'btn btn-primary', type: 'submit' }, 'Salvar');
   const form = h('form', { class: 'row g-3' },
     h('h6', { class: 'col-12 txt-primary mb-0' }, 'Funcionamento'),
@@ -245,7 +248,7 @@ export default async function render({ content, can }) {
 
   mount(content,
     pageTitle('Cardápio digital', link, h('a', { class: 'btn btn-outline-secondary', href: '/pedidos.html' }, 'Pedidos')),
-    s.menuUrl ? null : h('div', { class: 'alert alert-light' }, `Link do cardápio: <endereço do app>/${s.slug} (defina MENU_URL no servidor para mostrar o link aqui).`),
+    s.tableMenuUrl ? null : h('div', { class: 'alert alert-light' }, `Link do delivery: <endereço do app>/${s.slug} (defina MENU_URL no servidor para mostrar os links aqui).`),
     card('Configuração', form),
     card('Produtos no cardápio', h('p', { class: 'mb-0' },
       'Abra o produto e, em "Cardápio digital", marque "Mostrar no cardápio" e cadastre tamanhos, adicionais e escolhas. ',

@@ -233,7 +233,9 @@ export class AuthController {
     this.service.setCookie(res, await this.service.sign(user));
     await this.db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     await this.audit.log({ sub: user.id, companyId: user.companyId }, 'login', 'User', user.id, {}, req.ip);
-    return { ok: true, redirect: user.company.onboarded ? '/' : '/onboarding.html' };
+    // perfil Cozinha só enxerga a tela da cozinha
+    const redirect = user.role === 'cozinha' ? '/cozinha.html' : user.company.onboarded ? '/' : '/onboarding.html';
+    return { ok: true, redirect };
   }
 
   // público: sair só apaga o cookie — vale para sessão de loja e de aprovador

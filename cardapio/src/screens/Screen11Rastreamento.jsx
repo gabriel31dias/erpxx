@@ -4,7 +4,8 @@ import { useApp, brl } from '../context/AppContext';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { pub } from '../lib/api';
 
-const FLOW = ['pending', 'preparing', 'delivering', 'delivered'];
+// retirada: pronto já é "pode buscar"; entrega: pronto e depois sai com o entregador
+const FLOW = { delivery: ['pending', 'preparing', 'ready', 'delivering', 'delivered'], pickup: ['pending', 'preparing', 'ready', 'delivered'] };
 
 export function Screen11Rastreamento() {
   const { activeOrder: order, refreshOrders, navigateTo } = useApp();
@@ -22,13 +23,14 @@ export function Screen11Rastreamento() {
   if (!order) return null;
 
   const cancelled = order.status === 'cancelled';
-  const current = FLOW.indexOf(order.status);
-  const steps = [
-    'Pedido recebido',
-    'Em preparação',
-    order.delivery_type === 'pickup' ? 'Pronto para retirar' : 'Saiu para entrega',
-    order.delivery_type === 'pickup' ? 'Retirado' : 'Entregue',
-  ].map((title, i) => ({ title, state: i < current ? 'done' : i === current ? 'active' : 'pending' }));
+  const pickup = order.delivery_type === 'pickup';
+  const flow = pickup ? FLOW.pickup : FLOW.delivery;
+  // retirada marcada "saiu" no balcão (fluxo antigo) conta como pronta para buscar
+  const current = flow.indexOf(pickup && order.status === 'delivering' ? 'ready' : order.status);
+  const steps = (pickup
+    ? ['Pedido recebido', 'Em preparação', 'Pronto para retirar', 'Retirado']
+    : ['Pedido recebido', 'Em preparação', 'Pronto', 'Saiu para entrega', 'Entregue']
+  ).map((title, i) => ({ title, state: i < current ? 'done' : i === current ? 'active' : 'pending' }));
 
   const badge = cancelled
     ? 'bg-red-500/15 text-red-400 border-red-500/30'

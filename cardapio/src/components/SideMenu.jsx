@@ -17,8 +17,16 @@ const LINKS = [
   { label: 'Configurações', icon: Settings, screen: 'configuracoes' },
 ];
 
+/** na mesa não tem delivery: sem "meus pedidos" (é a comanda), favoritos, promoções nem WhatsApp */
+const dineLinks = (table) => [
+  LINKS[0], LINKS[1],
+  ...(table ? [LINKS[2], { label: `Mesa ${table}`, icon: ReceiptText, screen: 'minha_mesa' }] : []),
+  LINKS[6],
+];
+
 export function SideMenu({ open, onClose }) {
-  const { navigateTo, storeInfo, categories, products, setCategoryFilter, currentScreen } = useApp();
+  const { navigateTo, storeInfo, categories, products, setCategoryFilter, currentScreen, dine, table } = useApp();
+  const links = dine ? dineLinks(table) : LINKS;
   const cats = categories.filter(c => products.some(p => p.category === c.id));
 
   const go = (screen) => {
@@ -70,7 +78,7 @@ export function SideMenu({ open, onClose }) {
             </div>
 
             <nav className="flex-1 overflow-y-auto scrollbar-none py-3">
-              {LINKS.map(({ label, icon: Icon, screen }, i) => {
+              {links.map(({ label, icon: Icon, screen }, i) => {
                 const active = currentScreen === screen;
                 return (
                   <motion.button

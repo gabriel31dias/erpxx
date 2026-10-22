@@ -44,6 +44,15 @@ export const createOrder = (slug, body) =>
   request(`/public/stores/${encodeURIComponent(slug)}/orders`, { method: 'POST', body: JSON.stringify(body) });
 export const fetchOrders = (ids) => request(`/public/orders?ids=${ids.join(',')}`);
 
+// ---------- cardápio da mesa (QR): o pedido entra na comanda, igual ao do garçom ----------
+const tablePath = (slug, table) => `/public/stores/${encodeURIComponent(slug)}/tables/${table}`;
+export const dineApi = {
+  tab: (slug, table, code) => request(`${tablePath(slug, table)}?t=${encodeURIComponent(code)}`),
+  order: (slug, table, body) => request(`${tablePath(slug, table)}/orders`, { method: 'POST', body: JSON.stringify(body) }),
+  /** kind: waiter (chamar o garçom) | bill (pedir a conta) */
+  call: (slug, table, body) => request(`${tablePath(slug, table)}/calls`, { method: 'POST', body: JSON.stringify(body) }),
+};
+
 // ---------- app do garçom: rotas do ERP com a sessão (cookie) do usuário ----------
 // o header fecha o CSRF do ERP; o cookie é SameSite=strict, então a API precisa estar no mesmo site
 const erp = (path, init = {}) =>
@@ -59,6 +68,7 @@ export const waiterApi = {
   order: (table, body) => post(`/menu/tables/${table}/orders`, body),
   close: (table, body) => post(`/menu/tables/${table}/close`, body),
   transfer: (table, body) => post(`/menu/tables/${table}/transfer`, body),
+  attend: (table) => post(`/menu/tables/${table}/calls/attend`, {}),
   cancel: (orderId, reason) => post(`/menu/orders/${orderId}/cancel`, { reason }),
   cancelItem: (orderId, index, reason) => post(`/menu/orders/${orderId}/items/${index}/cancel`, { reason }),
   paymentMethods: () => erp('/company/payment-methods'),

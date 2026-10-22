@@ -1,18 +1,20 @@
 import {
-  BadRequestException, Body, Controller, Delete, Get, Inject, Module, NotFoundException,
+  BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Inject, Module, NotFoundException,
   Param, Patch, Post, Query, Req,
 } from '@nestjs/common';
 import {
-  ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min,
+  ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min,
   MinLength, ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import type { Request } from 'express';
-import { PRISMA, Db } from '../common/prisma.service';
+import { PRISMA, Db, Tx, TX } from '../common/prisma.service';
 import { CurrentUser, Perms, SessionUser } from '../common/auth.guard';
+import { can } from '../common/rbac';
 import { AuditService, BranchService, PlanService, TimeService } from '../common/core';
 import { paging } from '../common/util';
 import { PricingModule, PricingService } from './pricing';
+import { StockModule, StockService } from './stock';
 
 export const UNITS = ['UN', 'KG', 'G', 'L', 'ML', 'CX', 'PCT'];
 export const SALE_TYPES = ['UNIT', 'WEIGHT'];
@@ -54,6 +56,8 @@ class ProductDto {
   @IsOptional() @IsBoolean() active?: boolean;
   /** Estoque inicial só na criação; depois tudo passa por movimentação. */
   @IsOptional() @IsNumber() @Min(0) initialStock?: number;
+  /** Só na edição: soma ao saldo por uma nova entrada de mercadoria. */
+  @IsOptional() @IsNumber() @Min(0) addStock?: number;
   // ---- Dados fiscais (NF-e) ----
   @IsOptional() @IsString() ncm?: string;
   @IsOptional() @IsString() cest?: string;
@@ -73,6 +77,18 @@ class ProductDto {
   @IsOptional() @IsInt() @Min(0) oldPriceCents?: number | null;
   @IsOptional() @ValidateNested() @Type(() => MenuOptionsDto) menuOptions?: MenuOptionsDto;
   @IsOptional() @IsInt() position?: number;
+  // ---- Bilheteria (vazio limpa) ----
+  @IsOptional() @IsString() @MaxLength(120) eventName?: string;
+  @IsOptional() @IsDateString() eventDate?: string;
+  @IsOptional() @IsString() @MaxLength(60) ticketType?: string;
+  @IsOptional() @IsBoolean() ticketBox?: boolean;
+  @IsOptional() @IsString() @MaxLength(20) boxNumber?: string;
+  @IsOptional() @IsString() @MaxLength(20) tableNumber?: string;
+  // ---- Cozinha (omitido mantém o que está gravado) ----
+  /** praça da cozinha; vazio/null herda da categoria */
+  @IsOptional() @IsString() stationId?: string | null;
+  /** não vai para nenhuma tela da cozinha (ex.: lata que o balcão só entrega) */
+  @IsOptional() @IsBoolean() kitchenSkip?: boolean;
 }
 
 /** Mantém só dígitos (NCM/CEST/CFOP vêm com pontos às vezes). */
@@ -84,6 +100,17 @@ class CategoryDto {
   @IsOptional() @IsBoolean() active?: boolean;
   @IsOptional() @IsInt() @Min(1) @Max(4) maxFlavors?: number;
   @IsOptional() @IsInt() position?: number;
+  /** praça da cozinha dos produtos; vazio/null = Cozinha padrão (omitido mantém) */
+  @IsOptional() @IsString() stationId?: string | null;
+}
+
+/** praça informada precisa ser da empresa; '' vira null (herda) */
+async function stationOrNull(db: Db, companyId: string, stationId?: string | null) {
+  if (stationId === undefined) return undefined;
+  if (!stationId) return null;
+  const st = await db.kitchenStation.findFirst({ where: { id: stationId, companyId } });
+  if (!st) throw new BadRequestException('Praça da cozinha não encontrada.');
+  return st.id;
 }
 
 @Controller('api/products')
@@ -96,6 +123,7 @@ export class ProductsController {
     private branches: BranchService,
     private clock: TimeService,
     private pricing: PricingService,
+    private stock: StockService,
   ) {}
 
   /** Estoque do produto na filial pedida (ou soma de todas). */
@@ -247,22 +275,13 @@ export class ProductsController {
     await this.plans.assertLimit(u.companyId, 'products');
     await this.assertUnique(u.companyId, dto);
 
-    const product = await this.db.product.create({ data: { ...this.data(dto), companyId: u.companyId } });
-
-    if (dto.initialStock) {
-      const branchId = await this.branches.require(u);
-      const now = await this.clock.now(u.companyId);
-      await this.db.stock.create({
-        data: { companyId: u.companyId, branchId, productId: product.id, quantity: dto.initialStock },
-      });
-      await this.db.stockMovement.create({
-        data: {
-          companyId: u.companyId, branchId, productId: product.id, type: 'ENTRADA',
-          quantity: dto.initialStock, before: 0, after: dto.initialStock,
-          reason: 'Estoque inicial do cadastro', userId: u.sub, createdAtLocal: now,
-        },
-      });
-    }
+    const stationId = await stationOrNull(this.db, u.companyId, dto.stationId);
+    const entrada = dto.initialStock ? await this.entryCtx(u) : null;
+    const product = await this.db.$transaction(async (tx) => {
+      const created = await tx.product.create({ data: { ...this.data(dto), stationId, companyId: u.companyId } });
+      if (entrada) await this.entry(tx as Tx, u, entrada, created, dto.initialStock!, 'Estoque inicial do cadastro');
+      return created;
+    }, TX);
     await this.audit.log(u, 'create', 'Product', product.id, { nome: product.name, preco: product.priceCents }, req.ip);
     return product;
   }
@@ -272,8 +291,17 @@ export class ProductsController {
     const before = await this.db.product.findFirst({ where: { id, companyId: u.companyId, deletedAt: null } });
     if (!before) throw new NotFoundException('Produto não encontrado.');
     await this.assertUnique(u.companyId, dto, id);
+    if (dto.addStock && !can(u.role, 'estoque.entrada')) {
+      throw new ForbiddenException('Seu perfil não tem permissão para dar entrada no estoque.');
+    }
 
-    const product = await this.db.product.update({ where: { id }, data: this.data(dto) });
+    const stationId = await stationOrNull(this.db, u.companyId, dto.stationId);
+    const entrada = dto.addStock ? await this.entryCtx(u) : null;
+    const product = await this.db.$transaction(async (tx) => {
+      const updated = await tx.product.update({ where: { id }, data: { ...this.data(dto), stationId } });
+      if (entrada) await this.entry(tx as Tx, u, entrada, updated, dto.addStock!, 'Entrada pelo cadastro do produto');
+      return updated;
+    }, TX);
     // alteração de preço é auditada com destaque (briefing 27)
     const action = before.priceCents !== product.priceCents ? 'price' : 'update';
     await this.audit.log(u, action, 'Product', id, AuditService.diff(before, product), req.ip);
@@ -288,6 +316,28 @@ export class ProductsController {
     await this.db.product.update({ where: { id }, data: { deletedAt: new Date(), active: false } });
     await this.audit.log(u, 'delete', 'Product', id, { nome: product.name }, req.ip);
     return { ok: true };
+  }
+
+  private async entryCtx(u: SessionUser) {
+    return { branchId: await this.branches.require(u), at: await this.clock.now(u.companyId) };
+  }
+
+  /** Quantidade lançada no cadastro vira entrada de mercadoria (aparece em Estoque > Entradas). */
+  private async entry(
+    tx: Tx, u: SessionUser, ctx: { branchId: string; at: string },
+    product: { id: string; costCents: number }, quantity: number, notes: string,
+  ) {
+    const entry = await tx.stockEntry.create({
+      data: {
+        companyId: u.companyId, branchId: ctx.branchId, userId: u.sub, notes,
+        totalCents: Math.round(product.costCents * quantity), createdAtLocal: ctx.at,
+        items: { create: [{ companyId: u.companyId, productId: product.id, quantity, costCents: product.costCents }] },
+      },
+    });
+    await this.stock.move(tx, {
+      companyId: u.companyId, branchId: ctx.branchId, productId: product.id, type: 'ENTRADA',
+      quantity, reason: notes, refType: 'StockEntry', refId: entry.id, userId: u.sub, at: ctx.at,
+    });
   }
 
   private data(dto: ProductDto) {
@@ -330,6 +380,14 @@ export class ProductsController {
       cofinsAliqBp: dto.cofinsAliqBp ?? null,
       netWeight: dto.netWeight ?? null,
       grossWeight: dto.grossWeight ?? null,
+      // bilheteria
+      eventName: dto.eventName?.trim() || null,
+      eventDate: dto.eventDate ? new Date(dto.eventDate) : null,
+      ticketType: dto.ticketType?.trim() || null,
+      ticketBox: dto.ticketBox ?? false,
+      boxNumber: dto.boxNumber?.trim() || null,
+      tableNumber: dto.tableNumber?.trim() || null,
+      kitchenSkip: dto.kitchenSkip,
     };
   }
 
@@ -374,6 +432,7 @@ export class CategoriesController {
         companyId: u.companyId, name: dto.name.trim(),
         description: dto.description || null, active: dto.active ?? true,
         maxFlavors: dto.maxFlavors, position: dto.position,
+        stationId: await stationOrNull(this.db, u.companyId, dto.stationId),
       },
     });
     await this.audit.log(u, 'create', 'Category', category.id, { nome: category.name }, req.ip);
@@ -389,6 +448,7 @@ export class CategoriesController {
       data: {
         name: dto.name.trim(), description: dto.description || null, active: dto.active ?? before.active,
         maxFlavors: dto.maxFlavors, position: dto.position,
+        stationId: await stationOrNull(this.db, u.companyId, dto.stationId),
       },
     });
     await this.audit.log(u, 'update', 'Category', id, AuditService.diff(before, category), req.ip);
@@ -407,5 +467,5 @@ export class CategoriesController {
   }
 }
 
-@Module({ imports: [PricingModule], controllers: [ProductsController, CategoriesController] })
+@Module({ imports: [PricingModule, StockModule], controllers: [ProductsController, CategoriesController] })
 export class CatalogModule {}

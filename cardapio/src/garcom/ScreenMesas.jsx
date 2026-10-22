@@ -1,5 +1,5 @@
 import React from 'react';
-import { LogOut } from 'lucide-react';
+import { BellRing, LogOut, Receipt } from 'lucide-react';
 import { useApp, brl } from '../context/AppContext';
 import { BottomNav } from '../components/BottomNav';
 import { waiterApi } from '../lib/api';
@@ -9,6 +9,12 @@ export function ScreenMesas() {
   const { tables, live, setTable, navigateTo, waiter } = useApp();
   // mesa que saiu da configuração mas ainda tem conta aberta continua aparecendo
   const count = Math.max(tables.count, ...tables.orders.map((o) => o.table));
+  // pedir a conta vale mais que chamar: é o que aparece na ficha
+  const callOf = (n) => {
+    const mine = tables.calls.filter((c) => c.table === n);
+    return mine.find((c) => c.kind === 'bill') || mine[0];
+  };
+  const calling = [...new Set(tables.calls.map((c) => c.table))].sort((a, b) => a - b);
   const numbers = Array.from({ length: count }, (_, i) => i + 1);
 
   const open = (n) => {
@@ -41,6 +47,25 @@ export function ScreenMesas() {
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 pb-4 scrollbar-none">
+        {calling.length > 0 && (
+          <div role="alert" className="mb-3 space-y-2">
+            {calling.map((n) => {
+              const bill = callOf(n).kind === 'bill';
+              const Icon = bill ? Receipt : BellRing;
+              return (
+                <button
+                  key={n}
+                  onClick={() => open(n)}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl bg-amber-400 text-zinc-900 text-left active:scale-[0.98] transition"
+                >
+                  <Icon size={18} className="animate-bounce shrink-0" />
+                  <span className="text-sm font-black flex-1">Mesa {n} {bill ? 'pediu a conta' : 'está chamando'}</span>
+                  <span className="text-[11px] font-bold">Abrir</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         {count === 0 ? (
           <p className="py-16 text-center text-xs text-zinc-500">
             Nenhuma mesa configurada. No ERP, em <b className="text-zinc-300">Cardápio digital</b>, informe quantas mesas tem o salão.
@@ -52,6 +77,7 @@ export function ScreenMesas() {
               const busy = orders.length > 0;
               const total = orders.reduce((s, o) => s + o.totalCents, 0);
               const waiting = orders.some((o) => o.status === 'pending');
+              const call = callOf(n);
               return (
                 <button
                   key={n}
@@ -59,11 +85,13 @@ export function ScreenMesas() {
                   // cor da loja vem em variável CSS: o "/15" do Tailwind não funciona nela
                   style={busy ? { background: 'color-mix(in srgb, var(--brand) 15%, transparent)' } : undefined}
                   className={`aspect-square rounded-2xl p-2.5 flex flex-col items-center justify-center text-center active:scale-95 transition-all border ${
-                    busy ? 'border-[var(--brand)]' : 'bg-[#18181C] border-[#26262C] hover:border-zinc-600'
+                    call ? 'border-amber-400 ring-2 ring-amber-400' : busy ? 'border-[var(--brand)]' : 'bg-[#18181C] border-[#26262C] hover:border-zinc-600'
                   }`}
                 >
                   <span className={`text-2xl font-black ${busy ? 'text-white' : 'text-zinc-300'}`}>{n}</span>
-                  {busy ? (
+                  {call ? (
+                    <span className="text-[10px] mt-0.5 text-amber-400 font-bold">{call.kind === 'bill' ? 'Pediu a conta' : 'Chamando'}</span>
+                  ) : busy ? (
                     <>
                       <span className="text-[11px] font-bold text-white mt-0.5">{brl(total / 100)}</span>
                       <span className={`text-[10px] mt-0.5 ${waiting ? 'text-amber-400 font-semibold' : 'text-zinc-400'}`}>

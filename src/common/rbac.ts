@@ -3,7 +3,7 @@
  * Role/Permission/UserRole — a criação de funções personalizadas está no roadmap
  * e cabe aqui virando uma tabela `Role` com a mesma lista de strings.
  */
-export const ROLES = ['proprietario', 'admin', 'gerente', 'caixa', 'estoquista', 'financeiro', 'garcom'] as const;
+export const ROLES = ['proprietario', 'admin', 'gerente', 'caixa', 'estoquista', 'financeiro', 'garcom', 'cozinha'] as const;
 export type Role = (typeof ROLES)[number];
 
 export const PERMISSIONS = [
@@ -30,6 +30,7 @@ export const PERMISSIONS = [
   'pedido.visualizar', 'pedido.gerenciar', // pedidos do cardápio digital
   'cardapio.gerenciar', // aparência, horário e entrega do cardápio
   'mesa.atender', // app do garçom: lançar pedido na mesa e ver a comanda (fechar a conta pede pedido.gerenciar)
+  'cozinha.operar', // tela da cozinha: aceitar o pedido e marcar pronto (não entrega nem gera venda)
 
   'financeiro.visualizar', 'financeiro.gerenciar',
 
@@ -44,10 +45,13 @@ const CAIXA: Permission[] = [
   'cliente.visualizar', 'cliente.gerenciar',
   'pdv.acessar', 'pdv.cancelar_item', 'venda.visualizar',
   'caixa.visualizar', 'caixa.abrir', 'caixa.fechar',
-  'pedido.visualizar', 'pedido.gerenciar', 'mesa.atender',
+  'pedido.visualizar', 'pedido.gerenciar', 'mesa.atender', 'cozinha.operar',
 ];
 
 const GARCOM: Permission[] = ['produto.visualizar', 'pedido.visualizar', 'mesa.atender'];
+
+/** só a tela da cozinha: o login cai nela e as outras telas redirecionam para lá */
+const COZINHA: Permission[] = ['cozinha.operar'];
 
 const ESTOQUISTA: Permission[] = [
   'dashboard.visualizar', 'produto.visualizar', 'produto.criar', 'produto.editar', 'categoria.gerenciar',
@@ -74,6 +78,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   estoquista: ESTOQUISTA,
   financeiro: FINANCEIRO,
   garcom: GARCOM,
+  cozinha: COZINHA,
 };
 
 export const ROLE_LABELS: Record<Role, string> = {
@@ -84,6 +89,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   estoquista: 'Estoquista',
   financeiro: 'Financeiro',
   garcom: 'Garçom',
+  cozinha: 'Cozinha',
 };
 
 export function can(role: string, permission: Permission): boolean {

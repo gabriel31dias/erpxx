@@ -44,6 +44,7 @@ const MENU = [
   { key: 'maquininhas', href: '/maquininhas.html', label: 'Maquininhas', icon: 'widget', perm: 'venda.visualizar' },
   { key: 'pedidos', href: '/pedidos.html', label: 'Pedidos do cardápio', icon: 'task', perm: 'pedido.visualizar' },
   { key: 'mesas', href: '/mesas.html', label: 'Mesas', icon: 'table', perm: 'mesa.atender' },
+  { key: 'cozinha', href: '/cozinha.html', label: 'Cozinha', icon: 'task', perm: 'cozinha.operar' },
   { group: 'Cadastros' },
   { key: 'produtos', href: '/produtos.html', label: 'Produtos', icon: 'to-do', perm: 'produto.visualizar' },
   { key: 'estoque', href: '/estoque.html', label: 'Estoque', icon: 'charts', perm: 'estoque.visualizar' },
@@ -315,6 +316,29 @@ for (const [key, title, file, extra, extraCss] of pages) {
   fs.writeFileSync(path.join(OUT, file), appPage(key, title, extra, extraCss || ''));
 }
 fs.writeFileSync(path.join(OUT, 'pdv.html'), pdvPage());
+
+/** Tela da cozinha: tela cheia para tablet/TV, sem menu (o perfil Cozinha só vê esta). */
+function cozinhaPage() {
+  return `<!doctype html>
+<html lang="pt-BR" data-page="cozinha">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cozinha · LojaFlow</title>
+<link rel="icon" href="/assets/images/favicon.png" type="image/x-icon">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0e141a">
+<link rel="stylesheet" href="/fonts.css">
+<link rel="stylesheet" href="/cozinha.css">
+</head>
+<body class="lf-kds-body">
+<div id="lf-kds" class="lf-kds"><div class="lf-kds-vazio">Abrindo a cozinha…</div></div>
+<script type="module" src="/js/cozinha.js"></script>
+</body>
+</html>
+`;
+}
+fs.writeFileSync(path.join(OUT, 'cozinha.html'), cozinhaPage());
 
 /** Tela do aprovador da plataforma: fora do ERP, sem menu de loja. */
 function platformPage(key, title) {

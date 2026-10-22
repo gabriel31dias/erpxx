@@ -1,5 +1,5 @@
 // Configurações operacionais da loja (estoque, PDV, caixa, impressão).
-import { get, patch } from '../api.js';
+import { get, patch, post } from '../api.js';
 import { pageTitle } from '../shell.js';
 import { mount, card, centsToInput, field, h, input, moneyToCents, refreshIcons, textarea, toast } from '../ui.js';
 
@@ -15,18 +15,33 @@ export default async function render({ content, can }) {
     requireCustomer: check(s.requireCustomer),
     autoPrint: check(s.autoPrint),
     extSellerPix: check(s.extSellerPix !== false),
+    ticketMode: check(s.ticketMode),
     maxDiscountPct: input({ inputmode: 'decimal', value: String(s.maxDiscountPct) }),
     sangriaApproval: input({ inputmode: 'decimal', value: centsToInput(s.sangriaApprovalCents) }),
     receiptFooter: textarea({ value: s.receiptFooter, rows: 2 }),
     crediarioIntervalDays: input({ inputmode: 'numeric', value: String(s.crediarioIntervalDays ?? 30) }),
     crediarioGraceDays: input({ inputmode: 'numeric', value: String(s.crediarioGraceDays ?? 0) }),
     visitRadiusM: input({ inputmode: 'numeric', value: String(s.visitRadiusM ?? 150) }),
+    cloverFeePct: input({ inputmode: 'decimal', value: String(s.cloverFeePct ?? 0).replace('.', ',') }),
   };
 
   const linha = (campo, titulo, descricao) => h('div', { class: 'col-12 col-md-6' },
     h('div', { class: 'form-check' }, campo,
       h('label', { class: 'form-check-label' }, h('strong', {}, titulo),
         h('small', { class: 'd-block txt-secondary' }, descricao))));
+
+  // a maquininha passa a ver na hora: não espera o "Salvar configurações"
+  f.ticketMode.onchange = async () => {
+    const on = f.ticketMode.checked;
+    f.ticketMode.disabled = true;
+    try {
+      await patch('/company/settings', { ticketMode: on });
+      toast(on ? 'Modo bilheteria ligado.' : 'Modo bilheteria desligado.');
+    } catch (err) {
+      f.ticketMode.checked = !on;
+      toast(err.message, 'error');
+    } finally { f.ticketMode.disabled = false; }
+  };
 
   const salvar = h('button', { class: 'btn btn-primary', type: 'submit' }, 'Salvar configurações');
   const form = h('form', { class: 'row g-3' },
@@ -36,6 +51,8 @@ export default async function render({ content, can }) {
     linha(f.autoPrint, 'Imprimir comprovante automaticamente', 'Abre a impressão logo após a venda.'),
     linha(f.extSellerPix, 'Emitir PIX nas vendas do app de vendedor externo',
       'Ligado, o app gera QR e copia e cola pelo gateway. Exige o PIX configurado abaixo.'),
+    linha(f.ticketMode, 'Modo bilheteria',
+      'Cada venda vira um ingresso: a maquininha imprime o QR e queima o ingresso na entrada. Salva ao clicar.'),
     field('Desconto máximo do operador (%)', f.maxDiscountPct, {
       col: 'col-6 col-md-3', help: 'Acima disso, exige a permissão pdv.desconto.',
     }),
@@ -51,6 +68,9 @@ export default async function render({ content, can }) {
     field('Visitas: raio do check-in (metros)', f.visitRadiusM, {
       col: 'col-6 col-md-3', help: 'Check-in mais longe que isso do cliente aparece como "fora do local".',
     }),
+    field('Taxa da maquininha Clover (%)', f.cloverFeePct, {
+      col: 'col-6 col-md-3', help: 'Percentual cobrado pela Clover sobre o valor de cada venda.',
+    }),
     field('Rodapé do comprovante', f.receiptFooter, { col: 'col-12' }),
     h('div', { class: 'col-12 text-end' }, salvar));
 
@@ -64,12 +84,14 @@ export default async function render({ content, can }) {
         requireCustomer: f.requireCustomer.checked,
         autoPrint: f.autoPrint.checked,
         extSellerPix: f.extSellerPix.checked,
+        ticketMode: f.ticketMode.checked,
         maxDiscountPct: Number(f.maxDiscountPct.value.replace(',', '.')) || 0,
         sangriaApprovalCents: moneyToCents(f.sangriaApproval.value),
         receiptFooter: f.receiptFooter.value.trim(),
         crediarioIntervalDays: Math.max(1, parseInt(f.crediarioIntervalDays.value, 10) || 30),
         crediarioGraceDays: Math.max(0, parseInt(f.crediarioGraceDays.value, 10) || 0),
         visitRadiusM: Math.max(20, parseInt(f.visitRadiusM.value, 10) || 150),
+        cloverFeePct: Math.min(100, Math.max(0, Number(f.cloverFeePct.value.replace(',', '.')) || 0)),
       });
       toast('Configurações salvas.');
     } catch (err) { toast(err.message, 'error'); } finally { salvar.disabled = false; }
@@ -108,11 +130,56 @@ export default async function render({ content, can }) {
     } catch (err) { toast(err.message, 'error'); } finally { salvarPix.disabled = false; }
   };
 
+  // ---------- Praças da cozinha ----------
+  const pracasLista = h('div', { class: 'd-flex flex-column gap-2' });
+  async function carregarPracas() {
+    const { rows } = await get('/kitchen/stations', { all: 1 });
+    pracasLista.replaceChildren(...rows.map((st) => {
+      const nome = input({ value: st.name, 'aria-label': 'Nome da praça' });
+      const ativa = check(st.active);
+      ativa.disabled = st.isDefault; // a padrão recebe o que não tem praça
+      const salvarPraca = h('button', { class: 'btn btn-outline-primary', type: 'button' }, 'Salvar');
+      salvarPraca.onclick = async () => {
+        salvarPraca.disabled = true;
+        try {
+          await patch(`/kitchen/stations/${st.id}`, { name: nome.value.trim(), active: ativa.checked });
+          toast('Praça salva.');
+        } catch (err) { toast(err.message, 'error'); } finally { salvarPraca.disabled = false; }
+      };
+      return h('div', { class: 'd-flex flex-wrap gap-2 align-items-center' },
+        h('div', { style: 'flex:1;min-width:180px' }, nome),
+        st.isDefault
+          ? h('span', { class: 'badge text-bg-primary' }, 'Padrão')
+          : h('label', { class: 'form-check mb-0 d-flex gap-2 align-items-center' }, ativa, h('span', {}, 'Ativa')),
+        salvarPraca);
+    }));
+  }
+  const novaPraca = input({ placeholder: 'Ex.: Bar, Chapa, Sobremesa' });
+  const addPraca = h('button', { class: 'btn btn-primary', type: 'submit' }, 'Adicionar praça');
+  const pracasForm = h('form', { class: 'd-flex gap-2 mt-3' }, h('div', { style: 'flex:1' }, novaPraca), addPraca);
+  pracasForm.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!novaPraca.value.trim()) return;
+    addPraca.disabled = true;
+    try {
+      await post('/kitchen/stations', { name: novaPraca.value.trim() });
+      novaPraca.value = '';
+      toast('Praça adicionada.');
+      await carregarPracas();
+    } catch (err) { toast(err.message, 'error'); } finally { addPraca.disabled = false; }
+  };
+  await carregarPracas();
+
   mount(content,
     pageTitle('Configurações',
       h('a', { class: 'btn btn-outline-secondary', href: '/empresa.html' }, 'Dados da empresa')),
     card('Operação da loja', form),
     card('Pagamento PIX (gateway Blue)', pixForm),
+    card('Praças da cozinha', h('div', {},
+      h('p', { class: 'txt-secondary f-12' },
+        'Cada praça tem a sua tela de preparo (ex.: Cozinha e Bar). O produto vai para a praça da categoria ou para a escolhida no cadastro dele; '
+        + 'o que não tiver praça vai para a padrão. O pedido só fica "Pronto" quando todas as praças terminam.'),
+      pracasLista, pracasForm)),
     card('Backup e dados', h('div', {},
       h('p', {}, 'O banco de dados fica em ', h('code', {}, 'data/app.db'),
         '. Faça cópia periódica desse arquivo (ou do Postgres, em produção) e teste a restauração.'),

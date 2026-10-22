@@ -4,6 +4,7 @@
 //
 // Alarme: pedido novo toca uma sirene em loop e mostra uma faixa no topo até alguém atender.
 // Para sozinho quando o pedido sai de "Novo" (aceito/cancelado em qualquer tela ou aparelho);
+// chamado da mesa pelo QR (garçom/conta) toca igual e para quando alguém marca "Atendido" ou fecha a conta;
 // "Silenciar" numa aba cala todas as abas deste navegador. Trocar de tela recarrega a página:
 // ao (re)conectar, os pedidos ainda em "Novo" e não silenciados voltam a tocar.
 import { get } from './api.js';
@@ -35,7 +36,7 @@ function conectar() {
 
 // ---------- alarme ----------
 
-const tocando = new Map(); // id do pedido -> evento
+const tocando = new Map(); // id do pedido ou do chamado -> evento
 const canal = 'BroadcastChannel' in window ? new BroadcastChannel('lf-alarme-pedidos') : null;
 let audio = null;
 let laco = null;
@@ -113,11 +114,16 @@ function desenharFaixa() {
     faixa = null;
     return;
   }
-  const lista = [...tocando.values()].sort((a, b) => a.number - b.number);
+  const todos = [...tocando.values()];
+  const lista = todos.filter((e) => e.type !== 'call').sort((a, b) => a.number - b.number);
+  const chamados = todos.filter((e) => e.type === 'call').sort((a, b) => a.table - b.table);
   const primeiro = lista[0];
-  const texto = lista.length > 1
-    ? `${lista.length} pedidos novos esperando: ${lista.map((e) => `#${e.number}`).join(', ')}`
-    : `Pedido novo #${primeiro.number} ${primeiro.table ? `· Mesa ${primeiro.table}` : `de ${primeiro.customerName}`}`;
+  const textoPedidos = !lista.length ? ''
+    : lista.length > 1
+      ? `${lista.length} pedidos novos esperando: ${lista.map((e) => `#${e.number}`).join(', ')}`
+      : `Pedido novo #${primeiro.number} ${primeiro.table ? `· Mesa ${primeiro.table}` : `de ${primeiro.customerName}`}`;
+  const textoChamados = chamados.map((e) => `Mesa ${e.table} ${e.status === 'bill' ? 'pediu a conta' : 'chamando o garçom'}`).join(' · ');
+  const texto = [textoPedidos, textoChamados].filter(Boolean).join(' · ');
   const destino = lista.every((e) => e.table) ? '/mesas.html' : '/pedidos.html';
   const semSom = audio?.state !== 'running'
     ? h('span', { class: 'lf-alarme-dica' }, 'Clique em qualquer lugar da tela para ativar o som.')
@@ -126,7 +132,7 @@ function desenharFaixa() {
   const nova = h('div', { class: 'lf-alarme', role: 'alert' },
     h('span', { class: 'lf-alarme-sino', 'aria-hidden': 'true' }, '🔔'),
     h('div', { class: 'lf-alarme-texto' }, h('strong', {}, texto), semSom),
-    h('a', { class: 'lf-alarme-btn', href: destino, onclick: () => silenciar(true) }, 'Ver pedido'),
+    h('a', { class: 'lf-alarme-btn', href: destino, onclick: () => silenciar(true) }, lista.length ? 'Ver pedido' : 'Ver mesas'),
     h('button', { type: 'button', class: 'lf-alarme-btn vazado', onclick: () => silenciar(true) }, 'Silenciar'));
   if (faixa) faixa.replaceWith(nova);
   else document.body.append(nova);
@@ -139,7 +145,7 @@ function atualizar() {
     tocarMelodia();
     laco = setInterval(tocarMelodia, CICLO_MS);
     piscar = setInterval(() => {
-      document.title = document.title === tituloOriginal ? `🔔 ${tocando.size} pedido(s) novo(s)` : tituloOriginal;
+      document.title = document.title === tituloOriginal ? `🔔 ${tocando.size} aviso(s) novo(s)` : tituloOriginal;
     }, 1000);
   }
   if (!tocando.size && laco) {
@@ -169,11 +175,21 @@ export function ligarAlarmePedidos(can) {
         const calados = silenciados();
         const antes = tocando.size;
         for (const o of rows) if (!calados.has(o.id)) tocando.set(o.id, o);
+        if (can('mesa.atender')) {
+          const { calls } = await get('/menu/tables');
+          for (const c of calls) {
+            if (!calados.has(c.id)) tocando.set(c.id, { type: 'call', id: c.id, table: c.table, status: c.kind });
+          }
+        }
         if (tocando.size !== antes) atualizar();
       } catch { /* sem rede: o próximo open tenta de novo */ }
     },
     message(e) {
-      if (e.type === 'new' && e.status === 'pending') tocando.set(e.id, e);
+      if (e.type === 'call') {
+        if (e.status === 'attended') {
+          if (!tocando.delete(e.id)) return;
+        } else tocando.set(e.id, e); // cliente insistiu: toca de novo mesmo se tinha silenciado
+      } else if (e.type === 'new' && e.status === 'pending') tocando.set(e.id, e);
       else if (tocando.has(e.id) && e.status !== 'pending') tocando.delete(e.id);
       else return;
       atualizar();

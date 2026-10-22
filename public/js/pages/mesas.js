@@ -4,12 +4,14 @@ import { get, post } from '../api.js';
 import { branchId, pageTitle } from '../shell.js';
 import { ouvirPedidos } from '../pedidos-ao-vivo.js';
 import {
-  askReason, card, centsToInput, fmtBRL, h, modal, moneyInput, moneyToCents, mount, select, statusBadge, toast,
+  askReason, card, centsToInput, fmtBRL, h, icon, modal, moneyInput, moneyToCents, mount, refreshIcons, select, statusBadge,
+  toast,
 } from '../ui.js';
 
 const STATUS = {
   pending: { label: 'Novo', kind: 'warning' },
   preparing: { label: 'Preparando', kind: 'info' },
+  ready: { label: 'Pronto para servir', kind: 'primary' },
   delivering: { label: 'Preparando', kind: 'info' },
   delivered: { label: 'Servido', kind: 'success' },
 };
@@ -17,7 +19,7 @@ const STATUS = {
 export default async function render({ content, can }) {
   const fecha = can('pedido.gerenciar');
   const formas = fecha ? (await get('/company/payment-methods')).rows.filter((m) => m.active && m.type !== 'crediario') : [];
-  let dados = { tables: 0, serviceFeePercent: 0, orders: [] };
+  let dados = { tables: 0, serviceFeePercent: 0, orders: [], calls: [] };
   let aberta = null; // { mesa, m: modal, redesenhar } enquanto a comanda está aberta na tela
   const MOTIVOS = ['Cliente desistiu', 'Lançado errado', 'Sem o produto', 'Demora'];
   // garçom cancela só o que a cozinha ainda não aceitou; o resto é com caixa/gerente (o servidor confere)
@@ -29,6 +31,7 @@ export default async function render({ content, can }) {
 
   mount(content, pageTitle('Mesas',
     h('div', { class: 'd-flex gap-2' },
+      h('button', { type: 'button', class: 'btn btn-outline-secondary', onclick: () => imprimirTodas() }, 'QR das mesas'),
       h('button', { type: 'button', class: 'btn btn-outline-primary', onclick: () => fechadas() }, 'Fechadas hoje'),
       can('cardapio.gerenciar') ? h('a', { class: 'btn btn-outline-secondary', href: '/cardapio.html' }, 'Número de mesas') : null)),
   card(null, h('div', {},
@@ -37,6 +40,12 @@ export default async function render({ content, can }) {
 
   const pedidosDa = (mesa) => dados.orders.filter((o) => o.table === mesa);
   const totalDa = (mesa) => pedidosDa(mesa).reduce((s, o) => s + o.totalCents, 0);
+  // chamado do cliente pelo QR: pedir a conta vale mais que chamar o garçom
+  const chamadoDa = (mesa) => {
+    const meus = dados.calls.filter((c) => c.table === mesa);
+    return meus.find((c) => c.kind === 'bill') || meus[0];
+  };
+  const textoChamado = (c) => (c.kind === 'bill' ? 'pediu a conta' : 'chamando o garçom');
 
   function desenhar() {
     // mesa que saiu da configuração mas ainda tem conta aberta continua aparecendo
@@ -51,20 +60,106 @@ export default async function render({ content, can }) {
     grade.replaceChildren(...Array.from({ length: n }, (_, i) => i + 1).map((mesa) => {
       const pedidos = pedidosDa(mesa);
       const novo = pedidos.some((o) => o.status === 'pending');
-      return h('div', { class: 'col-6 col-sm-4 col-md-3 col-xl-2' },
+      const pronto = pedidos.some((o) => o.status === 'ready');
+      const chamado = chamadoDa(mesa);
+      return h('div', { class: 'col-6 col-sm-4 col-md-3 col-xl-2 position-relative' },
+        h('button', {
+          type: 'button', class: 'btn btn-sm btn-light border position-absolute py-0 px-1',
+          style: 'top:6px;right:18px;z-index:2', title: `QR Code da mesa ${mesa}`, 'aria-label': `QR Code da mesa ${mesa}`,
+          onclick: () => qrDaMesa(mesa),
+        }, icon('maximize', 14)),
         h('button', {
           type: 'button',
-          class: `btn w-100 h-100 py-3 d-flex flex-column align-items-center justify-content-center ${pedidos.length ? 'btn-primary' : 'btn-light border'}`,
+          class: `btn w-100 h-100 py-3 d-flex flex-column align-items-center justify-content-center ${chamado ? 'btn-warning' : pedidos.length ? 'btn-primary' : 'btn-light border'}`,
           style: 'min-height:110px',
-          'aria-label': `Mesa ${mesa}${pedidos.length ? `, ${fmtBRL(totalDa(mesa))}` : ', livre'}`,
+          'aria-label': `Mesa ${mesa}${chamado ? `, ${textoChamado(chamado)}` : ''}${pedidos.length ? `, ${fmtBRL(totalDa(mesa))}` : ', livre'}`,
           onclick: () => abrir(mesa),
         },
         h('div', { class: 'fs-4 fw-bold' }, String(mesa)),
+        chamado ? h('div', { class: 'f-12 fw-bold' }, `🔔 ${textoChamado(chamado)}`) : null,
         pedidos.length
           ? [h('div', { class: 'f-w-600' }, fmtBRL(totalDa(mesa))),
-            h('div', { class: 'f-12' }, novo ? '● aguardando cozinha' : `${pedidos.length} pedido(s)`)]
+            h('div', { class: 'f-12' }, pronto ? '● pronto para servir' : novo ? '● aguardando cozinha' : `${pedidos.length} pedido(s)`)]
           : h('div', { class: 'f-12 txt-secondary' }, 'Livre')));
     }));
+    refreshIcons(grade);
+  }
+
+  // ---------- QR da mesa: o cliente lê, vê o cardápio e o pedido entra na comanda (igual ao garçom) ----------
+  let qrs = null;
+  const dadosQr = async () => (qrs ??= await get('/menu/tables/qr'));
+  const carregarImagem = (src) => new Promise((ok, falha) => {
+    const img = new Image();
+    img.onload = () => ok(img);
+    img.onerror = () => falha(new Error('Não foi possível gerar o QR. Confira o número de mesas em Cardápio digital.'));
+    img.src = src;
+  });
+
+  /** cartão para colar na mesa: nome da loja, QR, endereço e "Mesa N", em PNG */
+  async function cartao(mesa, loja, url) {
+    const qr = await carregarImagem(`/api/menu/tables/${mesa}/qr.png`);
+    const c = document.createElement('canvas');
+    c.width = 800;
+    c.height = 1060;
+    const g = c.getContext('2d');
+    g.fillStyle = '#fff';
+    g.fillRect(0, 0, c.width, c.height);
+    g.fillStyle = '#111';
+    g.textAlign = 'center';
+    g.font = '600 42px sans-serif';
+    g.fillText(loja, 400, 90, 720);
+    g.drawImage(qr, 100, 130, 600, 600);
+    // endereço embaixo do QR, para quem não consegue ler: caminho numa linha, código da mesa na outra
+    const [caminho, codigo] = url.split('?');
+    g.fillStyle = '#555';
+    g.font = '400 22px monospace';
+    g.fillText(caminho.replace(/^https?:\/\//, ''), 400, 765, 740);
+    if (codigo) g.fillText(`?${codigo}`, 400, 795, 740);
+    g.fillStyle = '#111';
+    g.font = '800 110px sans-serif';
+    g.fillText(`Mesa ${mesa}`, 400, 920, 720);
+    g.font = '400 30px sans-serif';
+    g.fillText('Aponte a câmera para ver o cardápio e pedir', 400, 990, 740);
+    return c.toDataURL('image/png');
+  }
+
+  const imprimir = (imagens) => {
+    const w = window.open('', '_blank');
+    if (!w) return toast('Libere os pop-ups para imprimir.', 'error');
+    w.document.write(`<!doctype html><title>QR das mesas</title><style>
+      body{margin:0;font-family:sans-serif}img{width:9cm;margin:.5cm;break-inside:avoid}
+      @media print{@page{margin:1cm}}</style>${imagens.map((src) => `<img src="${src}">`).join('')}`);
+    w.document.close();
+    w.onload = () => w.print();
+  };
+
+  async function qrDaMesa(mesa) {
+    try {
+      const { store, tables } = await dadosQr();
+      const url = tables.find((t) => t.table === mesa)?.url;
+      if (!url) return toast('Mesa fora da configuração. Confira o número de mesas em Cardápio digital.', 'error');
+      const src = await cartao(mesa, store, url);
+      modal({
+        title: `QR Code · Mesa ${mesa}`,
+        body: h('div', { class: 'text-center' },
+          h('img', { src, alt: `QR Code da mesa ${mesa}`, style: 'max-width:100%;max-height:60vh;border:1px solid #eee;border-radius:8px' }),
+          h('p', { class: 'f-12 mt-2 mb-1 text-break' }, h('a', { href: url, target: '_blank', rel: 'noopener' }, url)),
+          h('p', { class: 'f-12 txt-secondary mb-0' }, 'O cliente lê, escolhe e o pedido cai na comanda desta mesa.')),
+        footer: [
+          h('a', { class: 'btn btn-outline-primary', href: src, download: `mesa-${mesa}.png` }, 'Baixar imagem'),
+          h('button', { type: 'button', class: 'btn btn-primary', onclick: () => imprimir([src]) }, 'Imprimir'),
+        ],
+      });
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function imprimirTodas() {
+    try {
+      const { store, tables } = await dadosQr();
+      if (!tables.length) return toast('Nenhuma mesa configurada.', 'error');
+      toast('Gerando os QR Codes…');
+      imprimir(await Promise.all(tables.map((t) => cartao(t.table, store, t.url))));
+    } catch (e) { toast(e.message, 'error'); }
   }
 
   async function cancelar(url, titulo) {
@@ -77,11 +172,28 @@ export default async function render({ content, can }) {
     } catch (e) { toast(e.message, 'error'); }
   }
 
+  /** faixa do chamado aberto na comanda: "Atendido" encerra (fechar a conta também encerra) */
+  function faixaChamado(mesa) {
+    const c = chamadoDa(mesa);
+    if (!c) return null;
+    const ok = h('button', { type: 'button', class: 'btn btn-sm btn-dark' }, 'Atendido');
+    ok.onclick = async () => {
+      ok.disabled = true;
+      try {
+        await post(`/menu/tables/${mesa}/calls/attend`, {});
+        carregar();
+      } catch (e) { toast(e.message, 'error'); ok.disabled = false; }
+    };
+    const desde = new Date(dados.calls.find((x) => x.table === mesa).createdAt).toLocaleTimeString('pt-BR').slice(0, 5);
+    return h('div', { class: 'alert alert-warning d-flex align-items-center gap-2 py-2', role: 'alert' },
+      h('strong', { class: 'me-auto' }, `🔔 Mesa ${mesa} ${textoChamado(c)} desde ${desde}`), ok);
+  }
+
   function comanda(mesa) {
     const pedidos = pedidosDa(mesa);
-    if (!pedidos.length) return h('p', { class: 'txt-secondary mb-0' }, 'Mesa livre, sem conta aberta.');
+    if (!pedidos.length) return h('div', {}, faixaChamado(mesa), h('p', { class: 'txt-secondary mb-0' }, 'Mesa livre, sem conta aberta.'));
     const x = (titulo, onclick) => h('button', { type: 'button', class: 'btn btn-sm btn-link text-danger p-0 ms-2', title: titulo, 'aria-label': titulo, onclick }, '✕');
-    return h('div', {},
+    return h('div', {}, faixaChamado(mesa),
       ...pedidos.map((o) => h('div', { class: 'border rounded p-3 mb-2' },
         h('div', { class: 'd-flex justify-content-between align-items-center mb-1' },
           h('div', {}, h('strong', { class: 'me-2' }, `#${o.number}`), statusBadge(STATUS[o.status]?.label ?? o.status, STATUS[o.status]?.kind ?? 'light')),

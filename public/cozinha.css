@@ -1,0 +1,90 @@
+/* Tela da cozinha (KDS): escura, letra grande, lida de longe num tablet ou TV. */
+:root {
+  --kds-bg: #0e141a;
+  --kds-col: #151d26;
+  --kds-card: #1d2733;
+  --kds-borda: #2a3644;
+  --kds-texto: #f1f5f9;
+  --kds-suave: #94a3b8;
+  --kds-novo: #f59e0b;
+  --kds-preparo: #3b82f6;
+  --kds-pronto: #16a34a;
+  --kds-alerta: #eab308;
+  --kds-atraso: #ef4444;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+.lf-kds-body { background: var(--kds-bg); color: var(--kds-texto); font-family: 'Montserrat', system-ui, sans-serif; }
+.lf-kds { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+.lf-kds-vazio { margin: auto; color: var(--kds-suave); font-size: 18px; text-align: center; padding: 24px; }
+
+/* topo */
+.lf-kds-topo { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--kds-borda); flex-wrap: wrap; }
+.lf-kds-titulo { font-size: 20px; font-weight: 700; margin-right: auto; }
+.lf-kds-titulo small { display: block; font-size: 12px; font-weight: 500; color: var(--kds-suave); }
+.lf-kds-relogio { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.lf-kds-status { font-size: 12px; padding: 4px 10px; border-radius: 99px; background: var(--kds-borda); }
+.lf-kds-status.on { background: rgba(22, 163, 74, .2); color: #4ade80; }
+.lf-kds-status.off { background: rgba(239, 68, 68, .2); color: #f87171; }
+.lf-kds-btn { border: 1px solid var(--kds-borda); background: var(--kds-card); color: var(--kds-texto); border-radius: 10px;
+  padding: 8px 14px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none; }
+.lf-kds-btn:hover { filter: brightness(1.15); }
+.lf-kds-btn:disabled { opacity: .5; cursor: wait; }
+
+/* colunas */
+.lf-kds-colunas { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 12px; }
+.lf-kds-coluna { background: var(--kds-col); border-radius: 14px; display: flex; flex-direction: column; min-height: 0; }
+.lf-kds-coluna-topo { display: flex; align-items: center; gap: 8px; padding: 12px 14px; font-size: 16px; font-weight: 700;
+  border-top: 4px solid var(--cor); border-radius: 14px 14px 0 0; }
+.lf-kds-coluna-topo .n { margin-left: auto; background: var(--cor); color: #fff; border-radius: 99px; padding: 2px 10px; font-size: 14px; }
+.lf-kds-lista { flex: 1; overflow-y: auto; padding: 0 10px 10px; display: flex; flex-direction: column; gap: 10px; }
+.lf-kds-lista .lf-kds-vazio { font-size: 14px; }
+.col-novo { --cor: var(--kds-novo); }
+.col-preparo { --cor: var(--kds-preparo); }
+.col-pronto { --cor: var(--kds-pronto); }
+
+/* card do pedido */
+.lf-kds-card { background: var(--kds-card); border: 1px solid var(--kds-borda); border-left: 6px solid var(--cor); border-radius: 12px; padding: 12px; }
+.lf-kds-card.chegou { animation: lf-kds-chegou 1s ease-in-out 3; }
+.lf-kds-card-topo { display: flex; align-items: baseline; gap: 8px; }
+.lf-kds-num { font-size: 26px; font-weight: 800; }
+.lf-kds-tipo { font-size: 15px; font-weight: 700; }
+.lf-kds-cliente { font-size: 13px; color: var(--kds-suave); }
+.lf-kds-tempo { margin-left: auto; font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; padding: 2px 8px; border-radius: 8px; background: var(--kds-borda); }
+.lf-kds-tempo.alerta { background: var(--kds-alerta); color: #111; }
+.lf-kds-tempo.atraso { background: var(--kds-atraso); color: #fff; }
+.lf-kds-pracas { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.lf-kds-praca { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: var(--kds-borda); color: var(--kds-suave); }
+.lf-kds-praca.preparing { background: rgba(59, 130, 246, .2); color: #93c5fd; }
+.lf-kds-praca.ready { background: rgba(22, 163, 74, .2); color: #86efac; }
+.lf-kds-praca.minha { outline: 1px solid currentColor; }
+.lf-kds-item-praca { margin-left: 8px; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 6px; background: var(--kds-borda); color: var(--kds-suave); vertical-align: middle; }
+select.lf-kds-btn { appearance: auto; }
+.lf-kds-itens { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.lf-kds-item { font-size: 18px; font-weight: 600; line-height: 1.3; }
+.lf-kds-item .q { display: inline-block; min-width: 36px; font-weight: 800; color: var(--cor); }
+.lf-kds-adic { margin: 2px 0 0 36px; font-size: 14px; font-weight: 500; color: #fbbf24; }
+.lf-kds-obs { background: rgba(239, 68, 68, .15); color: #fecaca; border-radius: 8px; padding: 8px 10px; font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+.lf-kds-acoes { display: flex; gap: 8px; }
+.lf-kds-acao { flex: 1; border: 0; border-radius: 10px; padding: 14px; font: inherit; font-size: 18px; font-weight: 800; color: #fff; background: var(--cor); cursor: pointer; }
+.lf-kds-acao:disabled { opacity: .5; cursor: wait; }
+.lf-kds-voltar { border: 1px solid var(--kds-borda); background: transparent; color: var(--kds-suave); border-radius: 10px; padding: 10px 12px; font: inherit; font-size: 14px; cursor: pointer; }
+.lf-kds-espera { flex: 1; text-align: center; color: #4ade80; font-weight: 700; padding: 10px; }
+
+/* avisos */
+.lf-kds-avisos { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 10; width: min(520px, calc(100% - 32px)); }
+.lf-kds-aviso { display: flex; align-items: center; gap: 12px; background: #f1f5f9; color: #0e141a; border-radius: 12px; padding: 12px 16px; font-weight: 600; box-shadow: 0 8px 30px rgba(0,0,0,.4); }
+.lf-kds-aviso.erro { background: #fecaca; color: #7f1d1d; }
+.lf-kds-aviso button { margin-left: auto; border: 0; background: #0e141a; color: #fff; border-radius: 8px; padding: 8px 14px; font: inherit; font-weight: 700; cursor: pointer; }
+.lf-kds-som { position: fixed; inset: 0; z-index: 20; background: rgba(14, 20, 26, .92); display: flex; align-items: center; justify-content: center; }
+.lf-kds-som button { border: 0; background: var(--kds-novo); color: #111; font: inherit; font-size: 22px; font-weight: 800; border-radius: 14px; padding: 20px 32px; cursor: pointer; }
+
+@keyframes lf-kds-chegou { 50% { box-shadow: 0 0 0 4px var(--kds-novo); } }
+@media (prefers-reduced-motion: reduce) { .lf-kds-card.chegou { animation: none; } }
+
+/* celular: uma coluna embaixo da outra */
+@media (max-width: 820px) {
+  .lf-kds-colunas { grid-template-columns: 1fr; overflow-y: auto; }
+  .lf-kds-coluna { min-height: auto; }
+  .lf-kds-lista { overflow: visible; }
+}

@@ -1,6 +1,16 @@
 # Cardápio digital (app do cliente)
 
-App mobile em React + Vite + Tailwind, aberto em `/cardapio/<slug-da-empresa>` no domínio do ERP. Não tem backend próprio:
+App mobile em React + Vite + Tailwind no domínio do ERP, com três entradas no mesmo build:
+
+- **Cardápio da mesa** `/cardapio/<slug>/mesa/<n>?t=<código>`: o cliente lê o QR colado na mesa (gerado em **Mesas** no ERP),
+  escolhe e o pedido cai na comanda da mesa, igual ao do garçom; a conta fecha no caixa. Sem o código do QR não pede;
+  `/cardapio/<slug>/mesa` (botão "Abrir cardápio") só mostra o cardápio.
+  Na tela "Mesa N" o cliente **chama o garçom** ou **pede a conta** (o sino da home também chama): o chamado aparece ao vivo
+  no app do garçom (vibra e toca), em **Mesas** e no alarme do ERP, e fica aberto até alguém tocar "Atendido" ou fechar a conta.
+- **Delivery** `/delivery/<slug>` (o link antigo `/cardapio/<slug>` continua abrindo o delivery): entrega/retirada, WhatsApp ou Pix.
+- **Garçom** `/garcom`.
+
+Abaixo, "cardápio" no fluxo do cliente é o delivery. Não tem backend próprio:
 lê o catálogo e manda pedidos para a API pública do ERP (`../src/modules/menu.ts`, rotas `/api/public/*`).
 Configuração da loja, produtos e pedidos ficam no ERP (menus **Cardápio digital** e **Pedidos do cardápio**).
 
