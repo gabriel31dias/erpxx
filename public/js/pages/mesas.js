@@ -401,7 +401,8 @@ export default async function render({ content, can }) {
 
   async function carregar() {
     try {
-      dados = await get('/menu/tables');
+      const r = await get('/menu/tables');
+      dados = { ...r, calls: r.calls ?? [] }; // API antiga (sem chamados) não derruba a tela
       desenhar();
       // comanda aberta na tela acompanha pedido novo e mudança de status
       if (aberta) aberta.redesenhar();

@@ -176,7 +176,7 @@ export function ligarAlarmePedidos(can) {
         const antes = tocando.size;
         for (const o of rows) if (!calados.has(o.id)) tocando.set(o.id, o);
         if (can('mesa.atender')) {
-          const { calls } = await get('/menu/tables');
+          const { calls = [] } = await get('/menu/tables');
           for (const c of calls) {
             if (!calados.has(c.id)) tocando.set(c.id, { type: 'call', id: c.id, table: c.table, status: c.kind });
           }
