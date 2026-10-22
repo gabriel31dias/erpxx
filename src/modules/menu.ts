@@ -16,7 +16,7 @@ import { join } from 'path';
 import { Throttle } from '@nestjs/throttler';
 import { Type } from 'class-transformer';
 import {
-  ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEmail, IsIn, IsInt, IsOptional, IsString, Matches, Max,
+  ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEmail, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, Max,
   MaxLength, Min, MinLength, ValidateIf, ValidateNested,
 } from 'class-validator';
 import type { MenuOrder, Company, Prisma } from '@prisma/client';
@@ -29,6 +29,7 @@ import { CurrentUser, Perms, Public, SessionUser, SkipCsrf } from '../common/aut
 import { AuditService, PlanService } from '../common/core';
 import { DATE_RE, paging, today, waPhone } from '../common/util';
 import { PaymentsModule, PixGateway } from './payments';
+import { FieldModule, GeoService } from './field';
 import type { UploadFile } from './attachments';
 import { MENU_FEE_SKU, MENU_ROLE, MENU_SERVICE_SKU, SalesModule, SalesService } from './sales';
 import { can } from '../common/rbac';
@@ -187,7 +188,7 @@ export const menuOf = (c: Pick<Company, 'menuSettings'>): MenuSettings => ({ ...
 const pixOn = (c: Company, m: MenuSettings) => m.pixEnabled && c.pixEnabled && !!c.pixSecretKey;
 const reais = (cents: number) => cents / 100;
 
-const toApiStore = (c: Company, m: MenuSettings) => ({
+export const toApiStore = (c: Company, m: MenuSettings) => ({
   id: c.id,
   slug: c.slug,
   name: c.tradeName || c.name,
@@ -348,7 +349,12 @@ async function insertOrder(db: Db, companyId: string, data: Omit<Prisma.MenuOrde
 
 // ---------- tempo real: avisa a tela de pedidos ----------
 
-type MenuEvent = { companyId: string; type: 'new' | 'update' | 'call'; id: string; number: number; customerName: string; status: string; table: number | null };
+export type MenuEvent = {
+  companyId: string; type: 'new' | 'update' | 'call' | 'courier'; id: string; number: number; customerName: string; status: string;
+  table: number | null; deliveryType?: string; courierId?: string | null;
+  /** courier: posição do motoboy (id = usuário) */
+  lat?: number; lng?: number; at?: string;
+};
 /** chamado da mesa: waiter = chamar o garçom, bill = pedir a conta */
 export type CallKind = 'waiter' | 'bill';
 
@@ -362,7 +368,18 @@ export class MenuEvents {
   private readonly bus = new Subject<MenuEvent>();
 
   emit(type: MenuEvent['type'], o: MenuOrder) {
-    this.bus.next({ companyId: o.companyId, type, id: o.id, number: o.number, customerName: o.customerName, status: o.status, table: o.table });
+    this.bus.next({
+      companyId: o.companyId, type, id: o.id, number: o.number, customerName: o.customerName, status: o.status, table: o.table,
+      deliveryType: o.deliveryType, courierId: o.courierId,
+    });
+  }
+
+  /** posição nova do motoboy: só o mapa das entregas ouve */
+  courier(companyId: string, userId: string, name: string, p: { lat: number; lng: number; at: Date }) {
+    this.bus.next({
+      companyId, type: 'courier', id: userId, number: 0, customerName: name, status: 'online', table: null,
+      lat: p.lat, lng: p.lng, at: p.at.toISOString(),
+    });
   }
 
   /** chamado da mesa aberto (status = kind) ou atendido (status = attended) */
@@ -370,11 +387,11 @@ export class MenuEvents {
     this.bus.next({ companyId, type: 'call', id, number: 0, customerName: `Mesa ${table}`, status, table });
   }
 
-  /** `calls: false`: a cozinha não recebe chamado de mesa */
-  stream(companyId: string, { calls = true } = {}): Observable<MessageEvent> {
+  /** `accept` escolhe o que cada tela ouve; posição do motoboy só vai para quem pede (chega a cada ~10 s) */
+  stream(companyId: string, accept: (e: MenuEvent) => boolean = (e) => e.type !== 'courier'): Observable<MessageEvent> {
     return merge(
       this.bus.pipe(
-        filter((e) => e.companyId === companyId && (calls || e.type !== 'call')),
+        filter((e) => e.companyId === companyId && accept(e)),
         map(({ companyId: _, ...data }) => ({ data })),
       ),
       // comentário a cada 25s: proxy e navegador não derrubam a conexão parada
@@ -406,6 +423,16 @@ class CreateOrderDto {
   @IsIn(['delivery', 'pickup']) delivery_type!: 'delivery' | 'pickup';
   @ValidateIf((o) => o.delivery_type === 'delivery') @IsString() @MinLength(5, { message: 'Informe o endereço de entrega' })
   @MaxLength(300) address?: string;
+  /** endereço em partes (CEP preenche rua/bairro/cidade): acha o ponto no mapa para o motoboy */
+  @IsOptional() @IsString() @MaxLength(9) zip?: string;
+  @IsOptional() @IsString() @MaxLength(120) street?: string;
+  @IsOptional() @IsString() @MaxLength(20) number?: string;
+  @IsOptional() @IsString() @MaxLength(80) district?: string;
+  @IsOptional() @IsString() @MaxLength(80) city?: string;
+  @IsOptional() @IsString() @MaxLength(2) state?: string;
+  /** "usar minha localização" no checkout */
+  @IsOptional() @IsNumber() @Min(-90) @Max(90) lat?: number;
+  @IsOptional() @IsNumber() @Min(-180) @Max(180) lng?: number;
   @IsOptional() @IsString() @MaxLength(300) notes?: string;
   @IsIn(['whatsapp', 'pix']) payment_method!: 'whatsapp' | 'pix';
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(50) @ValidateNested({ each: true }) @Type(() => LineDto) items!: LineDto[];
@@ -433,6 +460,7 @@ export class PublicMenuController {
 
   constructor(
     @Inject(PRISMA) private db: Db, private pix: PixGateway, private plans: PlanService, private events: MenuEvents,
+    private geo: GeoService,
   ) {}
 
   /** só empresa aprovada, ativa e com o cardápio ligado tem cardápio público */
@@ -508,7 +536,9 @@ export class PublicMenuController {
       throw new BadRequestException('Pedido por WhatsApp indisponível nesta loja');
 
     const cart = await priceFromDb(this.db, c.id, b.items, b.delivery_type === 'delivery' ? m.deliveryFeeCents : 0);
+    const gps = b.delivery_type === 'delivery' && b.lat != null && b.lng != null;
     let order = await insertOrder(this.db, c.id, {
+      ...(gps ? { lat: b.lat, lng: b.lng, geoSource: 'customer' } : {}),
       customerName: b.customer_name.trim(),
       customerPhone: b.customer_phone.trim(),
       deliveryType: b.delivery_type,
@@ -539,7 +569,29 @@ export class PublicMenuController {
     } else {
       this.events.emit('new', order);
     }
+    if (b.delivery_type === 'delivery' && !gps) void this.locate(order, b);
     return this.toPublic(c, order);
+  }
+
+  /** ponto da entrega no mapa, sem segurar a resposta do cliente (o Nominatim leva ~1 s e pode falhar) */
+  private async locate(o: MenuOrder, b: CreateOrderDto) {
+    try {
+      const hit = await this.geo.locate(b.street && b.city
+        ? { zip: b.zip, street: b.street, number: b.number, district: b.district, city: b.city, state: b.state }
+        : { zip: b.zip, address: b.address });
+      if (hit) await this.db.menuOrder.update({ where: { id: o.id }, data: { lat: hit.lat, lng: hit.lng, geoSource: hit.source } });
+    } catch (e) {
+      this.log.warn(`Pedido #${o.number} sem ponto no mapa: ${(e as Error).message}`);
+    }
+  }
+
+  /** CEP no checkout do delivery (a consulta do ERP pede login) */
+  @Get('cep/:cep')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  async cep(@Param('cep') cep: string) {
+    const r = await this.geo.cep(cep);
+    if (!r) throw new NotFoundException('CEP não encontrado.');
+    return r;
   }
 
   private toPublic(c: Company, o: MenuOrder) {
@@ -641,6 +693,11 @@ class StatusDto {
 class TableOrderDto {
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(50) @ValidateNested({ each: true }) @Type(() => LineDto) items!: LineDto[];
   @IsOptional() @IsString() @MaxLength(300) notes?: string;
+}
+
+class SettleDto {
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(200) @IsString({ each: true }) orderIds!: string[];
+  @IsOptional() @IsString() branchId?: string;
 }
 
 class CancelDto {
@@ -812,6 +869,9 @@ export class MenuController {
     if (o.saleId) throw new BadRequestException('Pedido já entregue e lançado como venda. Para desfazer, cancele a venda.');
     if (o.status === 'cancelled') throw new BadRequestException('Pedido cancelado.');
     if (['pending', 'rejected'].includes(o.paymentStatus)) throw new BadRequestException('Pix ainda não foi pago.');
+    if (o.deliveredAt && o.courierId) throw new BadRequestException('Entregue pelo motoboy: a venda sai no acerto do motoboy (tela Entregas).');
+    // voltou para antes de "pronto": sai do motoboy e volta para a fila
+    const unassign = o.courierId && ['pending', 'preparing', 'ready'].includes(dto.status) ? { courierId: null, courierAt: null } : {};
     // mesa: "entregue" é servido; a venda sai ao fechar a conta (closeTable)
     const pay = dto.paymentMethodId
       ? [{ paymentMethodId: dto.paymentMethodId, amountCents: o.totalCents, receivedCents: dto.receivedCents }]
@@ -821,7 +881,7 @@ export class MenuController {
       : null;
     await ticketsFollow(this.db, u.companyId, id, dto.status);
     const updated = await this.db.menuOrder.update({
-      where: { id }, data: { status: dto.status, ...stamps(o, dto.status), ...(saleId ? { saleId } : {}) },
+      where: { id }, data: { status: dto.status, ...stamps(o, dto.status), ...unassign, ...(saleId ? { saleId, deliveredAt: new Date() } : {}) },
     });
     await this.audit.log(u, 'status', 'MenuOrder', id, { numero: o.number, de: o.status, para: dto.status }, req.ip);
     this.events.emit('update', updated);
@@ -1037,6 +1097,35 @@ export class MenuController {
   }
 
   /**
+   * Acerto do motoboy: cada entrega que ele marcou como entregue vira venda no caixa de quem acerta,
+   * na forma que o motoboy informou (Pix pago no cardápio entra como PIX). Acertar de novo não duplica.
+   */
+  @Post('couriers/settle') @Perms('pedido.gerenciar') @HttpCode(200)
+  async settle(@CurrentUser() u: SessionUser, @Body() dto: SettleDto, @Req() req: Request) {
+    const orders = await this.db.menuOrder.findMany({
+      where: {
+        companyId: u.companyId, id: { in: dto.orderIds }, courierId: { not: null }, deliveredAt: { not: null },
+        saleId: null, status: 'delivered',
+      },
+      orderBy: { deliveredAt: 'asc' },
+    });
+    let totalCents = 0;
+    for (const o of orders) {
+      const payments = o.paymentMethod === 'pix' ? undefined : [{
+        paymentMethodId: o.courierPaymentMethodId!, amountCents: o.totalCents, receivedCents: o.courierReceivedCents ?? undefined,
+      }];
+      const saleId = await this.toSale(u, [o], { payments, branchId: dto.branchId }, req.ip);
+      const updated = await this.db.menuOrder.update({ where: { id: o.id }, data: { saleId } });
+      this.events.emit('update', updated);
+      totalCents += o.totalCents;
+    }
+    if (orders.length) {
+      await this.audit.log(u, 'settle', 'Courier', orders[0].courierId!, { pedidos: orders.map((o) => o.number), total: totalCents }, req.ip);
+    }
+    return { settled: orders.length, totalCents };
+  }
+
+  /**
    * Pedido entregue (ou conta da mesa) vira venda pelas mesmas regras do PDV: caixa aberto,
    * baixa de estoque, movimento de caixa e receita no financeiro. Chave de idempotência pelo
    * primeiro pedido: clique duplo ou nova tentativa devolve a mesma venda.
@@ -1146,7 +1235,7 @@ export class KitchenController {
   @Sse('events')
   @Header('X-Accel-Buffering', 'no')
   events$(@CurrentUser() u: SessionUser) {
-    return this.events.stream(u.companyId, { calls: false });
+    return this.events.stream(u.companyId, (e) => e.type === 'new' || e.type === 'update'); // sem chamado de mesa nem motoboy
   }
 
   // ---- praças ----
@@ -1322,5 +1411,10 @@ function kitchenOrder(o: KitchenRow, defaultId: string, nomes: Map<string, strin
   };
 }
 
-@Module({ imports: [PaymentsModule, SalesModule], controllers: [PublicMenuController, MenuController, KitchenController], providers: [MenuEvents] })
+@Module({
+  imports: [PaymentsModule, SalesModule, FieldModule],
+  controllers: [PublicMenuController, MenuController, KitchenController],
+  providers: [MenuEvents],
+  exports: [MenuEvents],
+})
 export class MenuModule {}

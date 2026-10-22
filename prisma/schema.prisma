@@ -17,37 +17,37 @@ datasource db {
 
 // ---------- SaaS / planos ----------
 model Plan {
-  id          String   @id @default(cuid())
-  code        String   @unique // basico | pro | premium
-  name        String
-  priceCents  Int      @default(0)
-  maxUsers    Int // -1 = ilimitado
-  maxBranches Int
+  id           String   @id @default(cuid())
+  code         String   @unique // basico | pro | premium
+  name         String
+  priceCents   Int      @default(0)
+  maxUsers     Int // -1 = ilimitado
+  maxBranches  Int
   maxRegisters Int
-  maxProducts Int
-  features    String   @default("[]") // JSON: ["relatorios.completo","export","multi.filial",...]
-  sortOrder   Int      @default(0)
-  createdAt   DateTime @default(now())
+  maxProducts  Int
+  features     String   @default("[]") // JSON: ["relatorios.completo","export","multi.filial",...]
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
 
   companies     Company[]
   subscriptions Subscription[]
 }
 
 model Subscription {
-  id          String    @id @default(cuid())
-  companyId   String
-  planId      String
-  status      String    @default("trial") // trial | active | past_due | cancelled | suspended
-  period      String    @default("monthly") // monthly | yearly
-  startedAt   DateTime  @default(now())
-  trialEndsAt DateTime?
+  id           String    @id @default(cuid())
+  companyId    String
+  planId       String
+  status       String    @default("trial") // trial | active | past_due | cancelled | suspended
+  period       String    @default("monthly") // monthly | yearly
+  startedAt    DateTime  @default(now())
+  trialEndsAt  DateTime?
   nextChargeAt DateTime?
-  cancelledAt DateTime?
-  endsAt      DateTime?
-  amountCents Int       @default(0)
-  provider    String    @default("manual")
-  providerId  String?   @unique
-  checkoutUrl String?
+  cancelledAt  DateTime?
+  endsAt       DateTime?
+  amountCents  Int       @default(0)
+  provider     String    @default("manual")
+  providerId   String?   @unique
+  checkoutUrl  String?
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   plan    Plan    @relation(fields: [planId], references: [id])
@@ -88,6 +88,9 @@ model Company {
   city       String?
   state      String?
   logoPath   String?
+  // ponto da loja no mapa (saída do motoboy); calculado do endereço na primeira rota
+  lat        Float?
+  lng        Float?
   timezone   String  @default("America/Sao_Paulo")
   currency   String  @default("BRL")
   theme      String  @default("light")
@@ -134,45 +137,47 @@ model Company {
 
   plan Plan @relation(fields: [planId], references: [id])
 
-  branches       Branch[]
-  users          User[]
-  sellers        Seller[]
-  invites        Invite[]
-  subscriptions  Subscription[]
-  categories     Category[]
-  products       Product[]
-  stocks         Stock[]
-  movements      StockMovement[]
-  suppliers      Supplier[]
-  entries        StockEntry[]
-  entryItems     StockEntryItem[]
-  customers      Customer[]
-  paymentMethods PaymentMethod[]
-  sales          Sale[]
-  saleItems      SaleItem[]
-  salePayments   SalePayment[]
+  branches        Branch[]
+  users           User[]
+  sellers         Seller[]
+  invites         Invite[]
+  subscriptions   Subscription[]
+  categories      Category[]
+  products        Product[]
+  stocks          Stock[]
+  movements       StockMovement[]
+  suppliers       Supplier[]
+  entries         StockEntry[]
+  entryItems      StockEntryItem[]
+  customers       Customer[]
+  paymentMethods  PaymentMethod[]
+  sales           Sale[]
+  saleItems       SaleItem[]
+  salePayments    SalePayment[]
   saleAttachments SaleAttachment[]
-  registers      CashRegister[]
-  sessions       CashSession[]
-  cashMovements  CashMovement[]
-  finCategories  FinancialCategory[]
-  finEntries     FinanceEntry[]
-  bankAccounts   BankAccount[]
-  bankTxs        BankTransaction[]
-  costCenters    CostCenter[]
-  fiscalDocs     FiscalDocument[]
-  priceLists     PriceList[]
-  priceListItems PriceListItem[]
-  routes         Route[]
-  routeStops     RouteStop[]
-  visits         Visit[]
-  sellerPings    SellerPing[]
-  terminals      Terminal[]
-  notifications  Notification[]
-  auditLogs      AuditLog[]
-  idempotency    IdempotencyKey[]
-  menuOrders     MenuOrder[]
-  tableCalls     TableCall[]
+  registers       CashRegister[]
+  sessions        CashSession[]
+  cashMovements   CashMovement[]
+  finCategories   FinancialCategory[]
+  finEntries      FinanceEntry[]
+  bankAccounts    BankAccount[]
+  bankTxs         BankTransaction[]
+  costCenters     CostCenter[]
+  fiscalDocs      FiscalDocument[]
+  priceLists      PriceList[]
+  priceListItems  PriceListItem[]
+  routes          Route[]
+  routeStops      RouteStop[]
+  visits          Visit[]
+  sellerPings     SellerPing[]
+  terminals       Terminal[]
+  notifications   Notification[]
+  auditLogs       AuditLog[]
+  idempotency     IdempotencyKey[]
+  menuOrders      MenuOrder[]
+  tableCalls      TableCall[]
+  courierPings    CourierPing[]
+  couriers        CourierPosition[]
   kitchenStations KitchenStation[]
   kitchenTickets  KitchenTicket[]
 
@@ -180,17 +185,17 @@ model Company {
 }
 
 model Branch {
-  id         String  @id @default(cuid())
-  companyId  String
-  name       String
-  document   String?
-  phone      String?
-  zip        String?
-  address    String?
-  city       String?
-  state      String?
-  isMain     Boolean @default(false)
-  active     Boolean @default(true)
+  id        String  @id @default(cuid())
+  companyId String
+  name      String
+  document  String?
+  phone     String?
+  zip       String?
+  address   String?
+  city      String?
+  state     String?
+  isMain    Boolean @default(false)
+  active    Boolean @default(true)
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -198,13 +203,13 @@ model Branch {
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  users     User[]
-  stocks    Stock[]
-  movements StockMovement[]
-  entries   StockEntry[]
-  sales     Sale[]
-  registers CashRegister[]
-  sessions  CashSession[]
+  users      User[]
+  stocks     Stock[]
+  movements  StockMovement[]
+  entries    StockEntry[]
+  sales      Sale[]
+  registers  CashRegister[]
+  sessions   CashSession[]
   finEntries FinanceEntry[]
   fiscalDocs FiscalDocument[]
   terminals  Terminal[]
@@ -220,7 +225,7 @@ model User {
   name           String
   email          String
   passwordHash   String
-  role           String    @default("caixa") // proprietario|admin|gerente|caixa|estoquista|financeiro|garcom|cozinha
+  role           String    @default("caixa") // proprietario|admin|gerente|caixa|estoquista|financeiro|garcom|cozinha|motoboy
   active         Boolean   @default(true)
   blockedAt      DateTime?
   lastLoginAt    DateTime?
@@ -231,9 +236,9 @@ model User {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  company       Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch        Branch?         @relation(fields: [branchId], references: [id])
-  sales         Sale[]          @relation("operator")
+  company       Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch        Branch?          @relation(fields: [branchId], references: [id])
+  sales         Sale[]           @relation("operator")
   movements     StockMovement[]
   entries       StockEntry[]
   sessions      CashSession[]
@@ -241,6 +246,9 @@ model User {
   finEntries    FinanceEntry[]
   auditLogs     AuditLog[]
   notifications Notification[]
+  deliveries    MenuOrder[]      @relation("courier")
+  courierPings  CourierPing[]
+  position      CourierPosition?
 
   @@unique([companyId, email])
   @@index([companyId])
@@ -351,7 +359,7 @@ model Product {
   eventName   String? // nome do evento
   eventDate   DateTime? // data/hora do evento
   ticketType  String? // tipo de ingresso (inteira, meia, VIP…)
-  ticketBox   Boolean @default(false) // camarote
+  ticketBox   Boolean   @default(false) // camarote
   boxNumber   String? // número do camarote
   tableNumber String? // mesa numerada
 
@@ -412,19 +420,19 @@ model Stock {
 }
 
 model StockMovement {
-  id        String @id @default(cuid())
-  companyId String
-  branchId  String
-  productId String
+  id             String  @id @default(cuid())
+  companyId      String
+  branchId       String
+  productId      String
   // ENTRADA|SAIDA|VENDA|DEVOLUCAO|AJUSTE|PERDA|TRANSFERENCIA|CANCELAMENTO
-  type      String
-  quantity  Float // sempre positivo; o sinal vem do tipo
-  before    Float
-  after     Float
-  reason    String?
-  refType   String? // Sale | StockEntry | Adjust
-  refId     String?
-  userId    String?
+  type           String
+  quantity       Float // sempre positivo; o sinal vem do tipo
+  before         Float
+  after          Float
+  reason         String?
+  refType        String? // Sale | StockEntry | Adjust
+  refId          String?
+  userId         String?
   createdAtLocal String // "YYYY-MM-DD HH:mm" no fuso da empresa
 
   createdAt DateTime @default(now())
@@ -457,7 +465,7 @@ model Supplier {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  company    Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company    Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   entries    StockEntry[]
   finEntries FinanceEntry[]
 
@@ -465,14 +473,14 @@ model Supplier {
 }
 
 model StockEntry {
-  id         String  @id @default(cuid())
-  companyId  String
-  branchId   String
-  supplierId String?
-  userId     String?
-  document   String? // nota/cupom do fornecedor
-  totalCents Int     @default(0)
-  notes      String?
+  id             String  @id @default(cuid())
+  companyId      String
+  branchId       String
+  supplierId     String?
+  userId         String?
+  document       String? // nota/cupom do fornecedor
+  totalCents     Int     @default(0)
+  notes          String?
   createdAtLocal String
 
   createdAt DateTime @default(now())
@@ -507,24 +515,24 @@ model StockEntryItem {
 
 // ---------- Clientes ----------
 model Customer {
-  id        String    @id @default(cuid())
-  companyId String
-  name      String
-  document  String?
-  phone     String?
-  whatsapp  String?
-  email     String?
-  birthdate String? // "YYYY-MM-DD"
-  address   String? // endereço em uma linha (montado dos campos abaixo quando preenchidos)
-  zip        String? // CEP, só dígitos
-  street     String?
-  number     String?
-  complement String?
-  district   String? // bairro
-  city       String?
-  state      String? // UF
-  notes     String?
-  active    Boolean   @default(true)
+  id          String  @id @default(cuid())
+  companyId   String
+  name        String
+  document    String?
+  phone       String?
+  whatsapp    String?
+  email       String?
+  birthdate   String? // "YYYY-MM-DD"
+  address     String? // endereço em uma linha (montado dos campos abaixo quando preenchidos)
+  zip         String? // CEP, só dígitos
+  street      String?
+  number      String?
+  complement  String?
+  district    String? // bairro
+  city        String?
+  state       String? // UF
+  notes       String?
+  active      Boolean @default(true)
   priceListId String? // tabela de preço do cliente; sem tabela = preço do cadastro
 
   // ---- Crediário: parcelas são FinanceEntry RECEITA pendentes (instrument = crediario) ----
@@ -641,26 +649,28 @@ model RouteStop {
   @@index([routeId, position])
 }
 
-/** Visita registrada (check-in). Visita planejada sem registro vira "não visitada" depois do dia. */
+/**
+ * Visita registrada (check-in). Visita planejada sem registro vira "não visitada" depois do dia.
+ */
 model Visit {
-  id          String  @id @default(cuid())
-  companyId   String
-  sellerId    String
-  customerId  String
-  routeId     String? // null = visita fora do roteiro
-  date        String // "YYYY-MM-DD" no fuso da empresa
-  status      String // IN_PROGRESS | DONE | SKIPPED (justificada sem ir)
-  checkInAt   String? // "YYYY-MM-DD HH:mm" do aparelho
-  checkInLat  Float?
-  checkInLng  Float?
-  accuracyM   Float?
-  distanceM   Int? // do cliente, quando ele tem coordenada
-  outOfRange  Boolean @default(false)
+  id           String  @id @default(cuid())
+  companyId    String
+  sellerId     String
+  customerId   String
+  routeId      String? // null = visita fora do roteiro
+  date         String // "YYYY-MM-DD" no fuso da empresa
+  status       String // IN_PROGRESS | DONE | SKIPPED (justificada sem ir)
+  checkInAt    String? // "YYYY-MM-DD HH:mm" do aparelho
+  checkInLat   Float?
+  checkInLng   Float?
+  accuracyM    Float?
+  distanceM    Int? // do cliente, quando ele tem coordenada
+  outOfRange   Boolean @default(false)
   mockLocation Boolean @default(false) // aparelho informou localização simulada
-  checkOutAt  String?
-  outcome     String? // VENDA | SEM_VENDA | FECHADO | AUSENTE
-  reason      String?
-  saleId      String?
+  checkOutAt   String?
+  outcome      String? // VENDA | SEM_VENDA | FECHADO | AUSENTE
+  reason       String?
+  saleId       String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -674,7 +684,9 @@ model Visit {
   @@index([companyId, date])
 }
 
-/** Posição do app durante o expediente (trajeto do dia no mapa). */
+/**
+ * Posição do app durante o expediente (trajeto do dia no mapa).
+ */
 model SellerPing {
   id        String   @id @default(cuid())
   companyId String
@@ -692,16 +704,16 @@ model SellerPing {
 }
 
 model PaymentMethod {
-  id                String  @id @default(cuid())
-  companyId         String
-  name              String
-  type              String // dinheiro|pix|debito|credito|vale|crediario|outro
-  active            Boolean @default(true)
-  requiresChange    Boolean @default(false) // calcula troco (dinheiro)
+  id                 String  @id @default(cuid())
+  companyId          String
+  name               String
+  type               String // dinheiro|pix|debito|credito|vale|crediario|outro
+  active             Boolean @default(true)
+  requiresChange     Boolean @default(false) // calcula troco (dinheiro)
   allowsInstallments Boolean @default(false)
-  maxInstallments   Int     @default(1)
-  feePct            Float   @default(0)
-  sortOrder         Int     @default(0)
+  maxInstallments    Int     @default(1)
+  feePct             Float   @default(0)
+  sortOrder          Int     @default(0)
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -717,56 +729,56 @@ model PaymentMethod {
 
 // ---------- Vendas ----------
 model Sale {
-  id             String  @id @default(cuid())
-  companyId      String
-  branchId       String
-  cashSessionId  String?
-  customerId     String?
-  operatorId     String?
-  sellerId       String? // venda enviada por vendedor externo
-  offline          Boolean @default(false) // gerada sem internet no app do vendedor
-  paidInApp        Boolean @default(false) // pagamento já feito no app do vendedor
-  appPaymentMethod String? // pix | cartao | boleto (quando paidInApp)
-  appPaymentRef    String? // id da transação/boleto no app, para conciliação
-  terminalId       String? // maquininha (POS) em que a venda foi feita
-  idempotencyKey   String? // chave do envio: a maquininha que subiu offline acha a venda por ela
+  id                     String    @id @default(cuid())
+  companyId              String
+  branchId               String
+  cashSessionId          String?
+  customerId             String?
+  operatorId             String?
+  sellerId               String? // venda enviada por vendedor externo
+  offline                Boolean   @default(false) // gerada sem internet no app do vendedor
+  paidInApp              Boolean   @default(false) // pagamento já feito no app do vendedor
+  appPaymentMethod       String? // pix | cartao | boleto (quando paidInApp)
+  appPaymentRef          String? // id da transação/boleto no app, para conciliação
+  terminalId             String? // maquininha (POS) em que a venda foi feita
+  idempotencyKey         String? // chave do envio: a maquininha que subiu offline acha a venda por ela
   // cobrança na maquininha (SiTef). Venda da maquininha com cartão/PIX nasce "pending";
   // o resto nasce "approved" (presumido: paymentReportedAt fica vazio até a maquininha informar)
-  paymentStatus     String    @default("approved") // pending | approved | declined
-  nsu               String? // id da transação no SiTef
-  responseCode      String? // código de retorno do SiTef ("0", "-2"…)
-  paidAt            DateTime? // aprovação informada pela maquininha
-  paymentReportedAt DateTime? // última vez que a maquininha informou o resultado
+  paymentStatus          String    @default("approved") // pending | approved | declined
+  nsu                    String? // id da transação no SiTef
+  responseCode           String? // código de retorno do SiTef ("0", "-2"…)
+  paidAt                 DateTime? // aprovação informada pela maquininha
+  paymentReportedAt      DateTime? // última vez que a maquininha informou o resultado
   // modo bilheteria: a venda é o ingresso (o QR leva o id) e só pode ser queimada uma vez
   ticketRedeemedAt       DateTime?
   ticketRedeemedById     String? // operador que leu o ingresso
   ticketRedeemedTerminal String? // número de série da maquininha que leu
-  number         Int
-  status         String  @default("COMPLETED") // OPEN|COMPLETED|CANCELLED|REFUNDED
-  subtotalCents  Int     @default(0)
-  discountCents  Int     @default(0)
-  totalCents     Int     @default(0)
-  costTotalCents Int     @default(0)
-  receivedCents  Int     @default(0) // dinheiro entregue pelo cliente
-  changeCents    Int     @default(0) // troco
-  notes          String?
-  priceListId    String? // tabela aplicada (snapshot: o cliente pode trocar de tabela depois)
-  cancelReason   String?
-  cancelledById  String?
-  cancelledAt    DateTime?
-  soldAt         String // "YYYY-MM-DD HH:mm" no fuso da empresa
+  number                 Int
+  status                 String    @default("COMPLETED") // OPEN|COMPLETED|CANCELLED|REFUNDED
+  subtotalCents          Int       @default(0)
+  discountCents          Int       @default(0)
+  totalCents             Int       @default(0)
+  costTotalCents         Int       @default(0)
+  receivedCents          Int       @default(0) // dinheiro entregue pelo cliente
+  changeCents            Int       @default(0) // troco
+  notes                  String?
+  priceListId            String? // tabela aplicada (snapshot: o cliente pode trocar de tabela depois)
+  cancelReason           String?
+  cancelledById          String?
+  cancelledAt            DateTime?
+  soldAt                 String // "YYYY-MM-DD HH:mm" no fuso da empresa
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company  Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch   Branch       @relation(fields: [branchId], references: [id])
-  session  CashSession? @relation(fields: [cashSessionId], references: [id])
-  customer Customer?    @relation(fields: [customerId], references: [id])
-  priceList PriceList?  @relation(fields: [priceListId], references: [id])
-  operator User?        @relation("operator", fields: [operatorId], references: [id])
-  seller   Seller?      @relation(fields: [sellerId], references: [id])
-  terminal Terminal?    @relation(fields: [terminalId], references: [id])
+  company   Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch    Branch       @relation(fields: [branchId], references: [id])
+  session   CashSession? @relation(fields: [cashSessionId], references: [id])
+  customer  Customer?    @relation(fields: [customerId], references: [id])
+  priceList PriceList?   @relation(fields: [priceListId], references: [id])
+  operator  User?        @relation("operator", fields: [operatorId], references: [id])
+  seller    Seller?      @relation(fields: [sellerId], references: [id])
+  terminal  Terminal?    @relation(fields: [terminalId], references: [id])
 
   items       SaleItem[]
   payments    SalePayment[]
@@ -790,18 +802,18 @@ model Sale {
  * `terminalId` do aparelho; a partir daí cada venda atualiza o "visto por último".
  */
 model Terminal {
-  id          String   @id @default(cuid())
-  companyId   String
-  serial      String // id que a maquininha manda em `terminalId` (número de série)
-  name        String? // apelido dado no ERP ("Caixa 2", "Balcão")
-  model       String? // modelo do aparelho, lido do User-Agent (ex.: C406)
-  branchId    String? // filial da última venda
-  active      Boolean  @default(true) // desativada no ERP: some da lista de ativas, volta ao vender
-  firstSeenAt DateTime @default(now())
-  lastSeenAt  DateTime @default(now())
-  lastSaleAt  String? // "YYYY-MM-DD HH:mm" no fuso da empresa
+  id             String   @id @default(cuid())
+  companyId      String
+  serial         String // id que a maquininha manda em `terminalId` (número de série)
+  name           String? // apelido dado no ERP ("Caixa 2", "Balcão")
+  model          String? // modelo do aparelho, lido do User-Agent (ex.: C406)
+  branchId       String? // filial da última venda
+  active         Boolean  @default(true) // desativada no ERP: some da lista de ativas, volta ao vender
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+  lastSaleAt     String? // "YYYY-MM-DD HH:mm" no fuso da empresa
   lastOperatorId String?
-  lastIp      String?
+  lastIp         String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -815,19 +827,19 @@ model Terminal {
 }
 
 model SaleItem {
-  id            String  @id @default(cuid())
-  companyId     String
-  saleId        String
-  productId     String
-  name          String // snapshot: o cadastro pode mudar depois
-  unit          String  @default("UN")
-  quantity      Float
+  id             String @id @default(cuid())
+  companyId      String
+  saleId         String
+  productId      String
+  name           String // snapshot: o cadastro pode mudar depois
+  unit           String @default("UN")
+  quantity       Float
   unitPriceCents Int
-  basePriceCents Int?   // preço do cadastro no momento da venda
-  priceSource   String  @default("BASE") // BASE | TABELA | MANUAL | OFFLINE (preço do aparelho, tabela mudou depois) | CARDAPIO (pedido do cardápio)
-  unitCostCents Int     @default(0)
-  discountCents Int     @default(0)
-  totalCents    Int
+  basePriceCents Int? // preço do cadastro no momento da venda
+  priceSource    String @default("BASE") // BASE | TABELA | MANUAL | OFFLINE (preço do aparelho, tabela mudou depois) | CARDAPIO (pedido do cardápio)
+  unitCostCents  Int    @default(0)
+  discountCents  Int    @default(0)
+  totalCents     Int
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
@@ -881,40 +893,84 @@ model SalePayment {
 /// Pedido do cardápio. Não é venda: tem ciclo de cozinha/entrega e só vira Sale depois.
 model MenuOrder {
   // uuid: é o "token" que o cliente usa para acompanhar o pedido sem login
-  id               String  @id @default(uuid())
-  companyId        String
-  number           Int
-  customerName     String
-  customerPhone    String
-  deliveryType     String // delivery | pickup | table
-  table            Int? // mesa (pedido do garçom); a comanda da mesa = pedidos dela ainda sem venda
-  address          String  @default("")
-  notes            String  @default("")
+  id                     String    @id @default(uuid())
+  companyId              String
+  number                 Int
+  customerName           String
+  customerPhone          String
+  deliveryType           String // delivery | pickup | table
+  table                  Int? // mesa (pedido do garçom); a comanda da mesa = pedidos dela ainda sem venda
+  address                String    @default("")
+  notes                  String    @default("")
   // JSON: [{ productId, name, quantity, unitCents, additionals: [{name, priceCents}], totalCents }]
-  items            String
-  subtotalCents    Int
-  deliveryFeeCents Int
-  totalCents       Int
-  paymentMethod    String // whatsapp | pix | comanda (paga ao fechar a conta da mesa)
-  paymentStatus    String  @default("none") // none | pending | approved | rejected | refund_pending (Pix pago e cancelado: estornar no gateway)
-  pixChargeId      String?
-  pixQrCode        String?
-  pixQrImage       String? // base64 do PNG, sem o prefixo data:
-  status           String  @default("pending") // pending | preparing | ready | delivering | delivered | cancelled
-  acceptedAt       DateTime? // cozinha aceitou (entrou em preparo)
-  readyAt          DateTime? // cozinha marcou pronto
-  cancelReason     String? // motivo do cancelamento (pedido inteiro)
-  saleId           String? // venda gerada quando o pedido é entregue
+  items                  String
+  subtotalCents          Int
+  deliveryFeeCents       Int
+  totalCents             Int
+  paymentMethod          String // whatsapp | pix | comanda (paga ao fechar a conta da mesa)
+  paymentStatus          String    @default("none") // none | pending | approved | rejected | refund_pending (Pix pago e cancelado: estornar no gateway)
+  pixChargeId            String?
+  pixQrCode              String?
+  pixQrImage             String? // base64 do PNG, sem o prefixo data:
+  status                 String    @default("pending") // pending | preparing | ready | delivering | delivered | cancelled
+  acceptedAt             DateTime? // cozinha aceitou (entrou em preparo)
+  readyAt                DateTime? // cozinha marcou pronto
+  cancelReason           String? // motivo do cancelamento (pedido inteiro)
+  saleId                 String? // venda gerada quando o pedido é entregue
+  // ponto da entrega no mapa: customer (GPS do cliente) | geocoder (achou o número) | approx | manual (ajuste no ERP)
+  lat                    Float?
+  lng                    Float?
+  geoSource              String?
+  // motoboy: aceita o pedido pronto, entrega e informa como o cliente pagou; a venda sai no acerto do caixa
+  courierId              String?
+  courierAt              DateTime? // aceitou (saiu para entrega)
+  deliveredAt            DateTime? // motoboy marcou entregue
+  courierPaymentMethodId String?
+  courierReceivedCents   Int? // dinheiro recebido do cliente (troco)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   company Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  courier User?           @relation("courier", fields: [courierId], references: [id])
   tickets KitchenTicket[]
 
   @@unique([companyId, number])
   @@index([companyId, status, createdAt])
   @@index([companyId, table, saleId])
+  @@index([companyId, courierId, saleId])
+}
+
+/// Onde o motoboy está agora (uma linha por motoboy): o mapa ao vivo lê daqui sem varrer os pings.
+model CourierPosition {
+  userId    String   @id
+  companyId String
+  lat       Float
+  lng       Float
+  accuracy  Float?
+  at        DateTime
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+}
+
+/// Trajeto do motoboy (posição a cada ~10 s com o app aberto).
+model CourierPing {
+  id        String   @id @default(cuid())
+  companyId String
+  userId    String
+  lat       Float
+  lng       Float
+  accuracy  Float?
+  at        DateTime // instante no aparelho
+  localDate String // "YYYY-MM-DD" no fuso da empresa
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, localDate, at])
 }
 
 /// Chamado da mesa pelo QR: o cliente chama o garçom ou pede a conta; fica aberto até alguém atender.
@@ -995,27 +1051,27 @@ model CashRegister {
 }
 
 model CashSession {
-  id          String  @id @default(cuid())
-  companyId   String
-  branchId    String
-  registerId  String
-  operatorId  String?
-  status      String  @default("open") // open | closed
-  openingCents Int    @default(0)
-  countedCents Int? // dinheiro contado no fechamento
-  expectedCents Int? // dinheiro esperado (abertura + vendas dinheiro + suprimentos - sangrias)
+  id              String  @id @default(cuid())
+  companyId       String
+  branchId        String
+  registerId      String
+  operatorId      String?
+  status          String  @default("open") // open | closed
+  openingCents    Int     @default(0)
+  countedCents    Int? // dinheiro contado no fechamento
+  expectedCents   Int? // dinheiro esperado (abertura + vendas dinheiro + suprimentos - sangrias)
   differenceCents Int?
-  closingData String  @default("{}") // JSON: esperado/contado por forma de pagamento
-  openedAt    String // "YYYY-MM-DD HH:mm"
-  closedAt    String?
-  notes       String?
+  closingData     String  @default("{}") // JSON: esperado/contado por forma de pagamento
+  openedAt        String // "YYYY-MM-DD HH:mm"
+  closedAt        String?
+  notes           String?
 
   createdAt DateTime @default(now())
 
-  company   Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch    Branch       @relation(fields: [branchId], references: [id])
-  register  CashRegister @relation(fields: [registerId], references: [id])
-  operator  User?        @relation(fields: [operatorId], references: [id])
+  company   Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch    Branch         @relation(fields: [branchId], references: [id])
+  register  CashRegister   @relation(fields: [registerId], references: [id])
+  operator  User?          @relation(fields: [operatorId], references: [id])
   sales     Sale[]
   movements CashMovement[]
 
@@ -1087,10 +1143,10 @@ model FinanceEntry {
   createdById     String?
 
   // ---- Bancário / instrumento / parcelamento / centro de custo ----
-  bankAccountId  String?
-  costCenterId   String?
-  instrument     String? // dinheiro|pix|boleto|cheque|transferencia|cartao|outro
-  instrumentInfo String? // JSON: boleto {linhaDigitavel, nossoNumero} / cheque {banco, numero, bomPara}
+  bankAccountId    String?
+  costCenterId     String?
+  instrument       String? // dinheiro|pix|boleto|cheque|transferencia|cartao|outro
+  instrumentInfo   String? // JSON: boleto {linhaDigitavel, nossoNumero} / cheque {banco, numero, bomPara}
   installmentGroup String? // agrupa parcelas do mesmo lançamento
   installmentNo    Int? // nº da parcela (1..N)
   installmentOf    Int? // total de parcelas (N)
@@ -1148,9 +1204,9 @@ model BankTransaction {
   id             String  @id @default(cuid())
   companyId      String
   bankAccountId  String
-  date           String  // "YYYY-MM-DD"
+  date           String // "YYYY-MM-DD"
   description    String
-  amountCents    Int     // positivo = crédito (entrada), negativo = débito (saída)
+  amountCents    Int // positivo = crédito (entrada), negativo = débito (saída)
   reconciled     Boolean @default(false)
   financeEntryId String? // vínculo com a conta a pagar/receber
   externalId     String? // id do extrato importado (evita duplicar)
@@ -1186,26 +1242,26 @@ model CostCenter {
 /// Documento fiscal (NF-e/NFC-e) emitido via provedor de API.
 /// `payload` guarda o JSON enviado; `providerRef` é o id no provedor.
 model FiscalDocument {
-  id          String  @id @default(cuid())
-  companyId   String
-  branchId    String?
-  saleId      String?
-  type        String  @default("nfce") // nfce|nfe
-  status      String  @default("draft") // draft|processing|authorized|rejected|cancelled|error
-  environment String  @default("homologacao")
-  number      Int?
-  serie       Int?
-  accessKey   String? // chave de acesso (44 dígitos)
-  protocol    String? // protocolo de autorização
-  providerRef String? // id da nota no provedor
-  provider    String?
-  xmlUrl      String?
-  danfeUrl    String?
-  qrcode      String? // NFC-e: string do QR Code
+  id              String  @id @default(cuid())
+  companyId       String
+  branchId        String?
+  saleId          String?
+  type            String  @default("nfce") // nfce|nfe
+  status          String  @default("draft") // draft|processing|authorized|rejected|cancelled|error
+  environment     String  @default("homologacao")
+  number          Int?
+  serie           Int?
+  accessKey       String? // chave de acesso (44 dígitos)
+  protocol        String? // protocolo de autorização
+  providerRef     String? // id da nota no provedor
+  provider        String?
+  xmlUrl          String?
+  danfeUrl        String?
+  qrcode          String? // NFC-e: string do QR Code
   rejectionReason String?
-  payload     String? // JSON enviado ao provedor
-  cancelReason String?
-  createdById String?
+  payload         String? // JSON enviado ao provedor
+  cancelReason    String?
+  createdById     String?
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt

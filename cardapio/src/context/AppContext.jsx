@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { fetchMenu, createOrder, fetchOrders, waiterApi, dineApi, pathParts, pub } from '../lib/api';
+import { fetchMenu, createOrder, fetchOrders, waiterApi, courierApi, dineApi, pathParts, pub } from '../lib/api';
 import { useTables } from '../garcom/useTables';
+import { useCourier } from '../motoboy/useCourier';
 
 const AppContext = createContext();
 
@@ -111,16 +112,28 @@ const toAppOrder = (o) => {
   };
 };
 
-/** waiter: usuário do ERP logado (/api/auth/me) = app do garçom; vazio = app do cliente */
-export function AppProvider({ children, waiter = null }) {
+/** endereço da entrega para a API: em partes (acha o ponto no mapa do motoboy) e em uma linha (WhatsApp e ERP) */
+export const deliveryAddress = (c, geo) => {
+  const gps = geo ? { lat: geo.lat, lng: geo.lng } : {};
+  if (!c.street) return { address: c.address, ...gps }; // endereço salvo antes do CEP: texto livre
+  const line = `${c.street}, ${c.number}${c.complement ? ` - ${c.complement}` : ''} - ${c.district}, ${c.city}${c.state ? `/${c.state}` : ''}`;
+  return {
+    address: line, zip: c.zip || undefined, street: c.street, number: c.number, district: c.district || undefined,
+    city: c.city, state: c.state || undefined, ...gps,
+  };
+};
+
+/** waiter / courier: usuário do ERP logado (/api/auth/me) = app do garçom / do motoboy; vazio = app do cliente */
+export function AppProvider({ children, waiter = null, courier = null }) {
   // dados da loja
   const [menu, setMenu] = useState({ loading: true, error: null, store: null, categories: [], products: [] });
 
   // garçom abre nas mesas; cliente (delivery ou mesa) abre na home da loja, com banner e logo
-  const start = waiter ? 'mesas' : 'home';
+  // motoboy abre nas entregas disponíveis
+  const start = waiter ? 'mesas' : courier ? 'entregas' : 'home';
   const [currentScreen, setCurrentScreen] = useState(start);
   const [history, setHistory] = useState([start]);
-  const [activeTab, setActiveTab] = useState(waiter ? 'mesas' : 'home');
+  const [activeTab, setActiveTab] = useState(start);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [selectedCategory, setSelectedCategory] = useState('todos');
   const [categoryFilter, setCategoryFilter] = useState('todos');
@@ -130,7 +143,11 @@ export function AppProvider({ children, waiter = null }) {
   const [cart, setCart] = usePersisted('cart', []);
   const [deliveryType, setDeliveryType] = useState('delivery');
   const [selectedPayment, setSelectedPayment] = useState('whatsapp');
-  const [customer, setCustomer] = usePersisted('customer', { name: '', phone: '', email: '', address: '', notes: '' });
+  const [customer, setCustomer] = usePersisted('customer', {
+    name: '', phone: '', email: '', address: '', notes: '', zip: '', street: '', number: '', complement: '', district: '', city: '', state: '',
+  });
+  // "usar minha localização": vale só para este pedido (não fica salvo, o próximo pode ser de outro lugar)
+  const [deliveryGeo, setDeliveryGeo] = useState(null);
   const [placing, setPlacing] = useState(false);
   const [orderError, setOrderError] = useState('');
 
@@ -147,7 +164,7 @@ export function AppProvider({ children, waiter = null }) {
 
   useEffect(() => {
     if (!SLUG) return setMenu((m) => ({ ...m, loading: false, error: 'Cardápio não encontrado' }));
-    (waiter ? waiterApi.catalog() : fetchMenu(SLUG))
+    (waiter ? waiterApi.catalog() : courier ? courierApi.store() : fetchMenu(SLUG))
       .then((d) => {
         const products = d.products.map(toAppProduct);
         setMenu({ loading: false, error: null, store: d.store, categories: d.categories, products });
@@ -170,7 +187,7 @@ export function AppProvider({ children, waiter = null }) {
         );
         if (!d.store.accepts_delivery) setDeliveryType('pickup');
         setSelectedPayment(d.store.whatsapp_enabled ? 'whatsapp' : 'pix');
-        document.title = waiter ? `Garçom · ${d.store.name}` : DINE?.table ? `Mesa ${DINE.table} · ${d.store.name}` : d.store.name;
+        document.title = waiter ? `Garçom · ${d.store.name}` : courier ? `Motoboy · ${d.store.name}` : DINE?.table ? `Mesa ${DINE.table} · ${d.store.name}` : d.store.name;
       })
       .catch((e) => setMenu((m) => ({ ...m, loading: false, error: e.message })));
   }, []);
@@ -191,7 +208,7 @@ export function AppProvider({ children, waiter = null }) {
     if (['home', 'categoria'].includes(screenKey)) setActiveTab('home');
     else if (['meus_pedidos', 'rastreamento'].includes(screenKey)) setActiveTab('pedidos');
     else if (['perfil', 'favoritos', 'configuracoes', 'suporte', 'sobre'].includes(screenKey)) setActiveTab('perfil');
-    else if (['mesas', 'comanda'].includes(screenKey)) setActiveTab(screenKey);
+    else if (['mesas', 'comanda', 'entregas', 'rota'].includes(screenKey)) setActiveTab(screenKey);
     else if (screenKey === 'minha_mesa') setActiveTab('comanda');
     window.scrollTo(0, 0);
   };
@@ -279,7 +296,7 @@ export function AppProvider({ children, waiter = null }) {
         customer_phone: customer.phone,
         customer_email: selectedPayment === 'pix' ? customer.email : undefined,
         delivery_type: deliveryType,
-        address: deliveryType === 'delivery' ? customer.address : undefined,
+        ...(deliveryType === 'delivery' ? deliveryAddress(customer, deliveryGeo) : {}),
         notes: customer.notes || undefined,
         payment_method: selectedPayment,
         items: cart.map(toApiLine),
@@ -306,6 +323,7 @@ export function AppProvider({ children, waiter = null }) {
   };
 
   const mesas = useTables(waiter, { cart, clearCart, toApiLine });
+  const entregas = useCourier(courier);
   const notify = (text) => setToast({ id: Date.now(), text });
 
   // cliente na mesa: manda para a comanda pelo QR e acompanha o que a mesa já pediu
@@ -337,9 +355,11 @@ export function AppProvider({ children, waiter = null }) {
     <AppContext.Provider
       value={{
         ...mesas,
+        ...entregas,
         ...dine,
         dine: !!DINE,
         waiter,
+        courier,
         notify,
         slug: SLUG,
         menu,
@@ -373,6 +393,8 @@ export function AppProvider({ children, waiter = null }) {
         setSelectedPayment,
         customer,
         setCustomer,
+        deliveryGeo,
+        setDeliveryGeo,
         placing,
         orderError,
         setOrderError,

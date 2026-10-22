@@ -16,6 +16,7 @@ process.env.PIX_API_BASE = 'http://127.0.0.1:47811';
 // ViaCEP e Nominatim falsos no mesmo servidor
 process.env.VIACEP_URL = 'http://127.0.0.1:47811';
 process.env.GEOCODER_URL = 'http://127.0.0.1:47811';
+process.env.ROUTING_URL = 'http://127.0.0.1:47811'; // OSRM falso (rota do motoboy)
 process.env.UPLOADS_DIR = require('path').join(__dirname, '..', 'data', 'test-uploads');
 process.env.MENU_IMAGES_DIR = require('path').join(process.env.UPLOADS_DIR, 'menu');
 
@@ -99,6 +100,14 @@ async function main() {
         ]));
       }
       return res.end('[]');
+    }
+    if (url.pathname.startsWith('/trip/v1/driving/')) { // OSRM: devolve as paradas na ordem inversa da enviada
+      const pts = url.pathname.split('/').pop()!.split(';').map((c) => c.split(',').map(Number));
+      const n = pts.length;
+      return res.end(JSON.stringify({
+        code: 'Ok', waypoints: pts.map((_, i) => ({ waypoint_index: i ? n - i : 0 })),
+        trips: [{ geometry: { coordinates: [pts[0], ...pts.slice(1).reverse()] }, distance: 4321, duration: 600 }],
+      }));
     }
     if (req.method === 'POST' && req.url === '/transactions') {
       pixMock.charges++;
@@ -1951,6 +1960,114 @@ async function main() {
     assert.deepEqual(fechadas.map((x: any) => [x.table, x.totalCents, x.serviceCents, x.closedBy, x.orders.length]).sort(),
       [[3, 22000, 2000, 'Dona Ana', 3], [4, 5000, 0, 'Dona Ana', 1]]);
     assert.deepEqual((await api('GET', '/api/menu/tables/closed?date=2000-01-01')).data.rows, []);
+  });
+
+  // ---------- motoboy ----------
+  console.log('\nMotoboy');
+  const motoboy = async (name: string, email: string) => client(base, `lf_session=${await app.get(AuthService).sign(
+    await db.user.create({ data: { companyId: ana.companyId, name, email, passwordHash: await bcrypt.hash('senha1234', 4), role: 'motoboy' } }),
+  )}`);
+  const moto1 = await motoboy('Beto Moto', 'moto1@teste.com');
+  const moto2 = await motoboy('Duda Moto', 'moto2@teste.com');
+  const entregas: string[] = [];
+
+  await check('motoboy: só o app de entregas; garçom não entra nas entregas', async () => {
+    assert.equal((await moto1('GET', '/api/menu/orders')).status, 403);
+    assert.equal((await moto1('GET', '/api/deliveries/live')).status, 403);
+    assert.equal((await garcom('GET', '/api/courier/orders')).status, 403);
+    const loja = await moto1('GET', '/api/courier/store');
+    assert.deepEqual([loja.status, loja.data.store.primary_color], [200, '#112233']);
+  });
+
+  await check('pedido de entrega ganha ponto no mapa: GPS do cliente ou endereço pelo CEP/rua', async () => {
+    const gps = await novoPedido({ lat: -23.56, lng: -46.65 });
+    const rua = await novoPedido({ zip: '01305-000', street: 'Rua Augusta', number: '500', district: 'Consolação', city: 'São Paulo', state: 'SP' });
+    assert.equal(gps.status, 201, JSON.stringify(gps.data));
+    entregas.push(gps.data.id, rua.data.id);
+    // o endereço é procurado depois da resposta: espera o Nominatim falso
+    let achado = null;
+    for (let i = 0; i < 30 && !achado?.lat; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      achado = await db.menuOrder.findUniqueOrThrow({ where: { id: rua.data.id } });
+    }
+    assert.deepEqual([achado!.lat, achado!.lng, achado!.geoSource], [-23.553, -46.652, 'geocoder']);
+    const g = await db.menuOrder.findUniqueOrThrow({ where: { id: gps.data.id } });
+    assert.deepEqual([g.lat, g.lng, g.geoSource], [-23.56, -46.65, 'customer']);
+    assert.equal((await pub('GET', '/api/public/cep/01305000')).data.street, 'Rua Augusta');
+  });
+
+  await check('só pedido pronto aparece; dois aceitam juntos e só um leva', async () => {
+    const livres = async () => (await moto1('GET', '/api/courier/orders')).data.available.map((o: any) => o.id);
+    assert.deepEqual((await livres()).filter((id: string) => entregas.includes(id)), []); // ainda na cozinha
+    for (const id of entregas) assert.equal((await api('PATCH', `/api/menu/orders/${id}/status`, { status: 'ready' })).status, 200);
+    assert.deepEqual((await livres()).filter((id: string) => entregas.includes(id)).sort(), [...entregas].sort());
+    const [a, b] = await Promise.all([moto1('POST', `/api/courier/orders/${entregas[0]}/accept`), moto2('POST', `/api/courier/orders/${entregas[0]}/accept`)]);
+    assert.deepEqual([a.status, b.status].sort(), [200, 409]);
+    // padroniza: o resto do teste usa moto1 com as duas entregas
+    if (b.status === 200) {
+      assert.equal((await moto2('POST', `/api/courier/orders/${entregas[0]}/release`)).status, 200);
+      assert.equal((await moto1('POST', `/api/courier/orders/${entregas[0]}/accept`)).status, 200);
+    }
+    assert.match((await moto2('POST', `/api/courier/orders/${entregas[0]}/accept`)).data.message, /Outro motoboy/);
+    assert.equal((await moto1('POST', `/api/courier/orders/${entregas[1]}/accept`)).status, 200);
+    const meus = (await moto1('GET', '/api/courier/orders')).data;
+    assert.deepEqual(meus.mine.map((o: any) => [o.id, o.status]).sort(), entregas.map((id) => [id, 'delivering']).sort());
+    assert.equal(meus.available.some((o: any) => entregas.includes(o.id)), false);
+    assert.equal((await moto2('POST', `/api/courier/orders/${entregas[1]}/delivered`, { paymentMethodId: fDinheiro.id })).status, 400);
+  });
+
+  await check('rota: ordem otimizada pelo serviço de rota; sem ele, linha reta pela mais perto', async () => {
+    const r = (await moto1('GET', '/api/courier/route?lat=-23.55&lng=-46.63')).data;
+    // o OSRM falso devolve as paradas na ordem inversa da enviada
+    assert.equal(r.source, 'osrm');
+    assert.equal(r.order.length, 2);
+    assert.deepEqual(r.meters, 4321);
+    assert.equal(r.path[0][0], -23.55);
+    const antes = process.env.ROUTING_URL;
+    process.env.ROUTING_URL = 'http://127.0.0.1:1';
+    const linha = (await moto1('GET', '/api/courier/route?lat=-23.55&lng=-46.63')).data;
+    process.env.ROUTING_URL = antes;
+    assert.equal(linha.source, 'line');
+    assert.equal(linha.path.length, 3);
+    assert.equal(linha.order[0], entregas[1]); // -23.553 fica mais perto de -23.55 que -23.56
+  });
+
+  await check('posição do motoboy: o mapa do ERP mostra onde está e o trajeto do dia', async () => {
+    const agora = new Date().toISOString();
+    const p = await moto1('POST', '/api/courier/pings', { pings: [{ lat: -23.551, lng: -46.64, at: agora, accuracy: 8 }] });
+    assert.deepEqual(p.data, { accepted: 1 });
+    const live = (await api('GET', '/api/deliveries/live')).data;
+    const beto = live.couriers.find((c: any) => c.name === 'Beto Moto');
+    assert.deepEqual([beto.lat, beto.lng, beto.delivering.sort()], [-23.551, -46.64, [...entregas].sort()]);
+    assert.ok(live.couriers.some((c: any) => c.name === 'Duda Moto' && c.lat == null)); // sem sinal ainda
+    const trilha = (await api('GET', `/api/deliveries/track?userId=${beto.id}`)).data.rows;
+    assert.equal(trilha.length, 1);
+    // ping atrasado da fila offline não volta o motoboy
+    await moto1('POST', '/api/courier/pings', { pings: [{ lat: -1, lng: -1, at: '2020-01-01T00:00:00Z' }] });
+    assert.equal((await api('GET', '/api/deliveries/live')).data.couriers.find((c: any) => c.id === beto.id).lat, -23.551);
+  });
+
+  await check('entregue: diz como pagou; ERP não lança por fora; acerto vira venda uma vez só', async () => {
+    const [um, dois] = entregas;
+    assert.match((await moto1('POST', `/api/courier/orders/${um}/delivered`, {})).data.message, /como o cliente pagou/);
+    const total = (await db.menuOrder.findUniqueOrThrow({ where: { id: um } })).totalCents;
+    assert.match((await moto1('POST', `/api/courier/orders/${um}/delivered`, { paymentMethodId: fDinheiro.id, receivedCents: total - 1 })).data.message, /menor/);
+    const ok = await moto1('POST', `/api/courier/orders/${um}/delivered`, { paymentMethodId: fDinheiro.id, receivedCents: total + 1000 });
+    assert.deepEqual([ok.status, ok.data.status], [200, 'delivered']);
+    assert.match((await api('PATCH', `/api/menu/orders/${um}/status`, { status: 'delivered', paymentMethodId: fDinheiro.id })).data.message, /acerto/);
+    // o segundo volta para a cozinha pelo ERP: sai do motoboy
+    assert.equal((await api('PATCH', `/api/menu/orders/${dois}/status`, { status: 'ready' })).status, 200);
+    assert.equal((await db.menuOrder.findUniqueOrThrow({ where: { id: dois } })).courierId, null);
+
+    assert.equal((await garcom('POST', '/api/menu/couriers/settle', { orderIds: [um] })).status, 403);
+    const acerto = await api('POST', '/api/menu/couriers/settle', { orderIds: [um, dois] });
+    assert.deepEqual([acerto.status, acerto.data.settled, acerto.data.totalCents], [200, 1, total]);
+    const o = await db.menuOrder.findUniqueOrThrow({ where: { id: um } });
+    const sale = await db.sale.findUniqueOrThrow({ where: { id: o.saleId! }, include: { payments: true } });
+    assert.deepEqual([sale.totalCents, sale.changeCents, sale.payments[0].methodType], [total, 1000, 'dinheiro']);
+    assert.equal((await api('POST', '/api/menu/couriers/settle', { orderIds: [um] })).data.settled, 0);
+    assert.equal((await api('GET', '/api/deliveries/live')).data.orders.some((x: any) => x.id === um), false);
+    await api('POST', `/api/menu/orders/${dois}/cancel`, { reason: 'Teste do motoboy' });
   });
 
   // ---------- tela da cozinha ----------

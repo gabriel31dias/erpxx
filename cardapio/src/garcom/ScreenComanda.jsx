@@ -4,6 +4,7 @@ import { useApp, brl } from '../context/AppContext';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { BottomNav } from '../components/BottomNav';
 import { waiterApi } from '../lib/api';
+import { Sheet, backBtn, inputCls } from '../components/Sheet';
 
 const STATUS = {
   pending: { label: 'Novo', cls: 'bg-amber-500/15 text-amber-400 border-amber-500/30' },
@@ -23,24 +24,6 @@ const toCents = (v) => {
 };
 const toInput = (cents) => (cents / 100).toFixed(2).replace('.', ',');
 
-/** folha que sobe do rodapé: a mesma moldura para motivo, transferência e fechamento */
-function Sheet({ label, onCancel, children }) {
-  return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-end justify-center" onClick={onCancel}>
-      <div
-        role="dialog"
-        aria-label={label}
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-[440px] max-h-[90vh] overflow-y-auto bg-[#18181C] rounded-t-3xl p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] space-y-4 anim-sheet-in"
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
-const inputCls = 'w-full px-3.5 py-2.5 rounded-xl bg-[#0E0E10] border border-[#26262C] text-sm text-white outline-none focus:border-[var(--brand)]';
-const backBtn = 'flex-1 py-3 rounded-2xl text-sm font-bold text-zinc-300 bg-[#0E0E10] border border-[#26262C]';
 
 /** comanda da mesa: pedidos ainda sem venda, cancelar, transferir e fechar a conta */
 export function ScreenComanda() {

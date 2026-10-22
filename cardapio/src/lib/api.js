@@ -42,6 +42,7 @@ const withAssets = (d) => {
 export const fetchMenu = async (slug) => withAssets(await request(`/public/stores/${encodeURIComponent(slug)}`));
 export const createOrder = (slug, body) =>
   request(`/public/stores/${encodeURIComponent(slug)}/orders`, { method: 'POST', body: JSON.stringify(body) });
+export const fetchCep = (cep) => request(`/public/cep/${cep.replace(/\D/g, '')}`);
 export const fetchOrders = (ids) => request(`/public/orders?ids=${ids.join(',')}`);
 
 // ---------- cardápio da mesa (QR): o pedido entra na comanda, igual ao do garçom ----------
@@ -72,4 +73,16 @@ export const waiterApi = {
   cancel: (orderId, reason) => post(`/menu/orders/${orderId}/cancel`, { reason }),
   cancelItem: (orderId, index, reason) => post(`/menu/orders/${orderId}/items/${index}/cancel`, { reason }),
   paymentMethods: () => erp('/company/payment-methods'),
+};
+
+// ---------- app do motoboy: mesmas rotas de sessão do ERP ----------
+export const courierApi = {
+  store: async () => withAssets(await erp('/courier/store')),
+  orders: () => erp('/courier/orders'),
+  paymentMethods: () => erp('/courier/payment-methods'),
+  accept: (id) => post(`/courier/orders/${id}/accept`, {}),
+  release: (id) => post(`/courier/orders/${id}/release`, {}),
+  delivered: (id, body) => post(`/courier/orders/${id}/delivered`, body),
+  pings: (pings) => post('/courier/pings', { pings }),
+  route: (pos) => erp(`/courier/route${pos ? `?lat=${pos.lat}&lng=${pos.lng}` : ''}`),
 };

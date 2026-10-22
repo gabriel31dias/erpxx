@@ -9,6 +9,7 @@ App mobile em React + Vite + Tailwind no domínio do ERP, com três entradas no 
   no app do garçom (vibra e toca), em **Mesas** e no alarme do ERP, e fica aberto até alguém tocar "Atendido" ou fechar a conta.
 - **Delivery** `/delivery/<slug>` (o link antigo `/cardapio/<slug>` continua abrindo o delivery): entrega/retirada, WhatsApp ou Pix.
 - **Garçom** `/garcom`.
+- **Motoboy** `/motoboy`.
 
 Abaixo, "cardápio" no fluxo do cliente é o delivery. Não tem backend próprio:
 lê o catálogo e manda pedidos para a API pública do ERP (`../src/modules/menu.ts`, rotas `/api/public/*`).
@@ -40,6 +41,26 @@ carrinho do cardápio, e mostra a comanda. "Fechar conta" junta os pedidos da me
 vários pagamentos. Na comanda: transferir/juntar mesas e cancelar pedido ou item, sempre com motivo
 (garçom só cancela pedido "Novo"; depois que a cozinha aceita, só caixa/gerente).
 Em produção abre em `/garcom`; em dev: `http://localhost:3333/cardapio/garcom`.
+
+## App do motoboy (`/motoboy`)
+
+Outra entrada do mesmo projeto: `src/motoboy/`, com as cores da loja e os componentes do delivery. Entra com o usuário
+do ERP de perfil **Motoboy** (o login do ERP manda direto para cá).
+
+1. A cozinha marca um pedido de **entrega** como pronto: ele aparece ao vivo em "Disponíveis" (SSE `/api/courier/events`)
+   para todos os motoboys. Quem tocar primeiro em **Aceitar** leva; o pedido vai para "Saiu para entrega".
+2. "Minhas entregas" mostra o mapa com a loja, onde o motoboy está e as paradas na melhor ordem pelas ruas
+   (OSRM `trip`), com Ligar, GPS (Google Maps/Waze) e **Entregue**, onde ele informa como o cliente pagou.
+3. Com o app aberto, a posição vai para o ERP a cada ~10 s. A tela não apaga enquanto houver entrega (Wake Lock);
+   com a tela apagada ou em outro app, o navegador para de mandar a posição.
+4. No ERP, **Entregas** mostra os motoboys no mapa ao vivo, o trajeto do dia e os prontos sem motoboy. O **acerto**
+   lança cada entrega como venda no caixa de quem acerta, na forma que o motoboy informou.
+
+O ponto da entrega vem do checkout do delivery: o CEP preenche o endereço e o cliente pode tocar em "usar minha
+localização". Sem isso, o servidor procura o endereço no Nominatim; o que não achar, o caixa marca no mapa em Entregas.
+
+Mapas: os servidores públicos do OSRM (rota) e do OpenStreetMap (mapa) servem para começar. Com mais uso, aponte
+`ROUTING_URL` (no `.env` do ERP) para um OSRM próprio e `VITE_TILE_URL` (no build do app) para um provedor com chave.
 
 ## Produção
 

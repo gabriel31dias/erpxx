@@ -234,7 +234,8 @@ export class AuthController {
     await this.db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     await this.audit.log({ sub: user.id, companyId: user.companyId }, 'login', 'User', user.id, {}, req.ip);
     // perfil Cozinha só enxerga a tela da cozinha
-    const redirect = user.role === 'cozinha' ? '/cozinha.html' : user.company.onboarded ? '/' : '/onboarding.html';
+    const redirect = user.role === 'cozinha' ? '/cozinha.html' : user.role === 'motoboy' ? '/motoboy/'
+      : user.company.onboarded ? '/' : '/onboarding.html';
     return { ok: true, redirect };
   }
 

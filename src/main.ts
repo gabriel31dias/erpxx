@@ -29,7 +29,9 @@ async function bootstrap() {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'same-origin');
-    res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+    // localização só no app do motoboy (rastreio) e no delivery ("usar minha localização" no checkout)
+    const geo = /^\/(motoboy|delivery|cardapio)(\/|$)/.test(req.path) ? 'geolocation=(self)' : 'geolocation=()';
+    res.setHeader('Permissions-Policy', `${geo}, microphone=(), camera=()`);
     // app do vendedor externo roda em outra origem. Só /api/ext: lá a sessão é
     // token Bearer (sem cookie), então liberar qualquer origem não abre CSRF.
     if (req.path.startsWith('/api/ext/')) {

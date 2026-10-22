@@ -285,6 +285,11 @@ export async function boot() {
     location.replace('/cozinha.html');
     return;
   }
+  // perfil Motoboy usa só o app do motoboy
+  if (me.user.role === 'motoboy') {
+    location.replace('/motoboy/');
+    return;
+  }
 
   if (me.company.theme === 'dark') document.body.classList.add('dark-only');
   if (!me.company.onboarded && page !== 'onboarding') {

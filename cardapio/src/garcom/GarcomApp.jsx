@@ -16,12 +16,12 @@ const SCREENS = {
   carrinho: Screen06Carrinho,
 };
 
-const Center = ({ children }) => (
+export const Center = ({ children }) => (
   <div className="w-full min-h-screen bg-black text-white flex flex-col items-center justify-center gap-3 px-8 text-center font-['Plus_Jakarta_Sans',sans-serif]">
     {children}
   </div>
 );
-const Spinner = () => <div className="w-10 h-10 rounded-full border-4 border-white/20 border-t-white animate-spin" />;
+export const Spinner = () => <div className="w-10 h-10 rounded-full border-4 border-white/20 border-t-white animate-spin" />;
 
 /** app do garçom em /garcom: entra com o usuário do ERP e reaproveita catálogo e carrinho do cardápio */
 export function GarcomApp() {
@@ -58,7 +58,8 @@ function Shell() {
   return <AppFrame><Screen /></AppFrame>;
 }
 
-function Login({ onLogin }) {
+/** login com o usuário do ERP (garçom e motoboy) */
+export function Login({ onLogin, title = 'Garçom' }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -83,7 +84,7 @@ function Login({ onLogin }) {
     <Center>
       <form onSubmit={submit} className="w-full max-w-[340px] space-y-3 text-left">
         <div className="text-center mb-6">
-          <h1 className="text-2xl font-black tracking-tight">Garçom</h1>
+          <h1 className="text-2xl font-black tracking-tight">{title}</h1>
           <p className="text-sm text-zinc-400 mt-1">Entre com seu usuário do sistema</p>
         </div>
         <input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="E-mail" aria-label="E-mail" className={input} />

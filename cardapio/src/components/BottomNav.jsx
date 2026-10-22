@@ -1,14 +1,17 @@
 import React from 'react';
-import { Home, FileText, ShoppingBag, Receipt, MoreHorizontal, LayoutGrid } from 'lucide-react';
+import { Home, FileText, ShoppingBag, Receipt, MoreHorizontal, LayoutGrid, Package, Map } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export function BottomNav({ activeTabOverride }) {
-  const { activeTab, setActiveTab, navigateTo, cart, waiter, dine, table } = useApp();
+  const { activeTab, setActiveTab, navigateTo, cart, waiter, courier, deliveries, dine, table } = useApp();
   const current = activeTabOverride || activeTab;
 
   const totalCartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
-  const tabs = waiter ? [
+  const tabs = courier ? [
+    { id: 'entregas', label: 'Disponíveis', icon: Package, screen: 'entregas', badge: deliveries.available.length || undefined },
+    { id: 'rota', label: 'Minhas entregas', icon: Map, screen: 'rota', badge: deliveries.mine.length || undefined },
+  ] : waiter ? [
     { id: 'mesas', label: 'Mesas', icon: LayoutGrid, screen: 'mesas' },
     { id: 'home', label: 'Cardápio', icon: FileText, screen: 'categoria' },
     { id: 'meupedido', label: 'Pedido', icon: ShoppingBag, screen: 'carrinho', badge: totalCartCount || undefined },

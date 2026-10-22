@@ -32,6 +32,7 @@ import { FieldModule } from './modules/field';
 import { PlatformModule } from './modules/platform';
 import { TerminalsModule } from './modules/terminals';
 import { MENU_IMAGES_DIR, MenuModule } from './modules/menu';
+import { DeliveryModule } from './modules/delivery';
 
 // O tema Riho fica na pasta do starter kit; se copiado para dentro do projeto, usa a cópia local.
 const localAssets = join(__dirname, '..', 'public', 'assets');
@@ -39,10 +40,10 @@ const themeAssets = existsSync(localAssets) ? localAssets : join(__dirname, '..'
 
 // App do cardápio (cardapio/dist, build com base /cardapio/) no mesmo domínio do ERP:
 // cardápio da mesa em /cardapio/<slug>/mesa/<n> (QR), delivery em /delivery/<slug> (o antigo /cardapio/<slug>
-// continua abrindo o delivery) e garçom em /garcom. Vem antes do public/, cujo fallback pega tudo.
+// continua abrindo o delivery), garçom em /garcom e motoboy em /motoboy. Vem antes do public/, cujo fallback pega tudo.
 const menuApp = join(__dirname, '..', 'cardapio', 'dist');
 const menuAppRoots = existsSync(join(menuApp, 'index.html'))
-  ? ['/cardapio', '/delivery', '/garcom'].map((serveRoot) => ({ rootPath: menuApp, serveRoot }))
+  ? ['/cardapio', '/delivery', '/garcom', '/motoboy'].map((serveRoot) => ({ rootPath: menuApp, serveRoot }))
   : [];
 
 @Module({
@@ -61,7 +62,7 @@ const menuAppRoots = existsSync(join(menuApp, 'index.html'))
       { rootPath: join(__dirname, '..', 'public'), exclude: ['/api/{*path}'] },
     ),
     AuthModule, CatalogModule, CrmModule, StockModule, SalesModule, CashModule,
-    FinanceModule, ReportsModule, CompanyModule, UsersModule, BillingModule, ImportsModule, PaymentsModule, FiscalModule, MiscModule, SellersModule, AttachmentsModule, PricingModule, CreditModule, FieldModule, PlatformModule, TerminalsModule, MenuModule,
+    FinanceModule, ReportsModule, CompanyModule, UsersModule, BillingModule, ImportsModule, PaymentsModule, FiscalModule, MiscModule, SellersModule, AttachmentsModule, PricingModule, CreditModule, FieldModule, PlatformModule, TerminalsModule, MenuModule, DeliveryModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

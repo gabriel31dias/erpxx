@@ -3,7 +3,7 @@ import { BASE, waiterApi } from '../lib/api';
 
 /** chamado novo de mesa: vibra e dá um "plim" (o navegador só toca depois do primeiro toque na tela) */
 let audio = null;
-function ding() {
+export function ding() {
   navigator.vibrate?.([200, 100, 200]);
   try {
     audio ??= new AudioContext();

@@ -3,7 +3,7 @@
  * Role/Permission/UserRole — a criação de funções personalizadas está no roadmap
  * e cabe aqui virando uma tabela `Role` com a mesma lista de strings.
  */
-export const ROLES = ['proprietario', 'admin', 'gerente', 'caixa', 'estoquista', 'financeiro', 'garcom', 'cozinha'] as const;
+export const ROLES = ['proprietario', 'admin', 'gerente', 'caixa', 'estoquista', 'financeiro', 'garcom', 'cozinha', 'motoboy'] as const;
 export type Role = (typeof ROLES)[number];
 
 export const PERMISSIONS = [
@@ -31,6 +31,8 @@ export const PERMISSIONS = [
   'cardapio.gerenciar', // aparência, horário e entrega do cardápio
   'mesa.atender', // app do garçom: lançar pedido na mesa e ver a comanda (fechar a conta pede pedido.gerenciar)
   'cozinha.operar', // tela da cozinha: aceitar o pedido e marcar pronto (não entrega nem gera venda)
+  'entrega.realizar', // app do motoboy: aceitar pedido pronto, ver a rota e marcar entregue
+  'entrega.monitorar', // mapa das entregas e acerto do motoboy no ERP
 
   'financeiro.visualizar', 'financeiro.gerenciar',
 
@@ -45,13 +47,16 @@ const CAIXA: Permission[] = [
   'cliente.visualizar', 'cliente.gerenciar',
   'pdv.acessar', 'pdv.cancelar_item', 'venda.visualizar',
   'caixa.visualizar', 'caixa.abrir', 'caixa.fechar',
-  'pedido.visualizar', 'pedido.gerenciar', 'mesa.atender', 'cozinha.operar',
+  'pedido.visualizar', 'pedido.gerenciar', 'mesa.atender', 'cozinha.operar', 'entrega.monitorar',
 ];
 
 const GARCOM: Permission[] = ['produto.visualizar', 'pedido.visualizar', 'mesa.atender'];
 
 /** só a tela da cozinha: o login cai nela e as outras telas redirecionam para lá */
 const COZINHA: Permission[] = ['cozinha.operar'];
+
+/** só o app do motoboy (/motoboy): o ERP manda para lá */
+const MOTOBOY: Permission[] = ['entrega.realizar'];
 
 const ESTOQUISTA: Permission[] = [
   'dashboard.visualizar', 'produto.visualizar', 'produto.criar', 'produto.editar', 'categoria.gerenciar',
@@ -79,6 +84,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   financeiro: FINANCEIRO,
   garcom: GARCOM,
   cozinha: COZINHA,
+  motoboy: MOTOBOY,
 };
 
 export const ROLE_LABELS: Record<Role, string> = {
@@ -90,6 +96,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   financeiro: 'Financeiro',
   garcom: 'Garçom',
   cozinha: 'Cozinha',
+  motoboy: 'Motoboy',
 };
 
 export function can(role: string, permission: Permission): boolean {
