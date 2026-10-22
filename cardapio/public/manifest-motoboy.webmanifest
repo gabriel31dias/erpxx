@@ -1,0 +1,17 @@
+{
+  "name": "Motoboy",
+  "short_name": "Motoboy",
+  "description": "Entregas e rota do motoboy",
+  "id": "/motoboy/",
+  "start_url": "/motoboy/",
+  "scope": "/motoboy/",
+  "display": "standalone",
+  "background_color": "#0E0E10",
+  "theme_color": "#0E0E10",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "/cardapio/icons/motoboy-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/cardapio/icons/motoboy-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/cardapio/icons/motoboy-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

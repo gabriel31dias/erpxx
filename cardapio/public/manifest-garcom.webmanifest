@@ -1,0 +1,17 @@
+{
+  "name": "Garçom",
+  "short_name": "Garçom",
+  "description": "Mesas e comandas do salão",
+  "id": "/garcom/",
+  "start_url": "/garcom/",
+  "scope": "/garcom/",
+  "display": "standalone",
+  "background_color": "#0E0E10",
+  "theme_color": "#0E0E10",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "/cardapio/icons/garcom-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/cardapio/icons/garcom-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/cardapio/icons/garcom-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

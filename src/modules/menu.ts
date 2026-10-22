@@ -585,6 +585,26 @@ export class PublicMenuController {
     }
   }
 
+  /**
+   * Manifesto do delivery da loja: instalado no celular, abre com o nome e as cores da loja.
+   * Sem ele, quem tem o ERP instalado abria o delivery dentro do app do ERP (escopo "/", abertura com o ícone dele).
+   */
+  @Get('stores/:slug/manifest.webmanifest')
+  @Header('Content-Type', 'application/manifest+json; charset=utf-8')
+  @Header('Cache-Control', 'public, max-age=3600')
+  async manifest(@Param('slug') slug: string) {
+    const { c, m } = await this.company(slug);
+    const name = c.tradeName || c.name;
+    const icon = (file: string, size: number, purpose?: string) =>
+      ({ src: `/cardapio/icons/${file}`, sizes: `${size}x${size}`, type: 'image/png', ...(purpose ? { purpose } : {}) });
+    return {
+      name, short_name: name.length <= 15 ? name : name.split(' ')[0].slice(0, 15), description: m.subtitle || `Peça na ${name}`, lang: 'pt-BR',
+      id: `/delivery/${c.slug}`, start_url: `/delivery/${c.slug}`, scope: `/delivery/${c.slug}`,
+      display: 'standalone', background_color: m.backgroundColor, theme_color: m.backgroundColor,
+      icons: [icon('delivery-192.png', 192), icon('delivery-512.png', 512), icon('delivery-maskable-512.png', 512, 'maskable')],
+    };
+  }
+
   /** CEP no checkout do delivery (a consulta do ERP pede login) */
   @Get('cep/:cep')
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
