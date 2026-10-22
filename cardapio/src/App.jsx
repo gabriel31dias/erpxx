@@ -25,7 +25,7 @@ import { ScreenPix } from './screens/ScreenPix';
 import { ScreenMinhaMesa } from './screens/ScreenMinhaMesa';
 
 export function App() {
-  const { currentScreen, menu, slug, dine } = useApp();
+  const { currentScreen, menu, slug } = useApp();
   const [ready, setReady] = useState(false); // abertura (logo + barra) até as fotos carregarem
 
   const renderCurrentScreen = () => {
@@ -86,15 +86,7 @@ export function App() {
     );
   }
 
-  // abertura com logo e barra só no cardápio da mesa (QR); o delivery abre direto
-  if (dine && !ready) return <SplashLoader store={menu.store} products={menu.products} onDone={() => setReady(true)} />;
-  if (menu.loading) {
-    return (
-      <div className="w-full min-h-screen bg-black flex items-center justify-center">
-        <div role="status" aria-label="Carregando" className="w-10 h-10 rounded-full border-4 border-white/20 border-t-white animate-spin" />
-      </div>
-    );
-  }
+  if (!ready) return <SplashLoader store={menu.store} products={menu.products} onDone={() => setReady(true)} />;
 
   return <AppFrame>{renderCurrentScreen()}</AppFrame>;
 }
