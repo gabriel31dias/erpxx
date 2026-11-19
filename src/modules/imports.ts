@@ -6,6 +6,7 @@ import { CurrentUser, Perms, SessionUser } from '../common/auth.guard';
 import { AuditService, BranchService, PlanService, TimeService } from '../common/core';
 import { StockService } from './stock';
 import { UNITS } from './catalog';
+import { ContactImportsController } from './contact-imports';
 
 /** Colunas aceitas -> campo do produto. O usuário confirma o mapeamento na tela. */
 export const IMPORT_FIELDS = [
@@ -206,5 +207,5 @@ export class ImportsController {
   }
 }
 
-@Module({ controllers: [ImportsController], providers: [StockService] })
+@Module({ controllers: [ImportsController, ContactImportsController], providers: [StockService] })
 export class ImportsModule {}

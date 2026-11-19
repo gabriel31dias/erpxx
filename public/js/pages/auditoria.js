@@ -40,6 +40,7 @@ export default async function render({ content }) {
     lista.replaceChildren(h('div', { class: 'lf-skeleton', style: 'height:140px' }));
     const data = await get('/audit', state);
     lista.replaceChildren(dataList({
+      fetchPage: (page, pageSize) => get('/audit', { ...state, page, pageSize }),
       rows: data.rows,
       empty: 'Nenhum registro de auditoria.',
       columns: [

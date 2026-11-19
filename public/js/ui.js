@@ -203,7 +203,9 @@ export function card(title, content, actions) {
  * Lista responsiva a partir de uma única definição de colunas:
  * tabela no desktop, cards no celular.
  */
-export function dataList({ columns, rows, empty = 'Nenhum registro encontrado.', emptyAction, card }) {
+export function dataList({
+  columns, rows, empty = 'Nenhum registro encontrado.', emptyAction, card, exportName, fetchPage, exportRows,
+}) {
   if (!rows.length) return emptyState(empty, emptyAction);
 
   const table = h('div', { class: 'table-responsive d-none d-md-block' },
@@ -216,7 +218,116 @@ export function dataList({ columns, rows, empty = 'Nenhum registro encontrado.',
     h('div', { class: 'card mb-0 lf-card-item' }, h('div', { class: 'card-body p-3' },
       card ? card(r) : defaultCard(columns, r)))));
 
-  return h('div', {}, table, cards);
+  // exporta as colunas com rótulo; com fetchPage, todas as páginas do filtro atual
+  const todas = fetchPage ? () => allPages(fetchPage) : exportRows ? async () => exportRows : async () => rows;
+  return h('div', {}, exportBar(columns, todas, exportName), table, cards);
+}
+
+// ---------- exportação CSV / XML ----------
+// a casca (shell.js) liga a regra de permissão/plano; devolve a mensagem de bloqueio ou null
+let exportBlock = () => null;
+export const setExportGate = (fn) => { exportBlock = fn; };
+
+/** busca página a página (a API devolve no máximo 100 por vez) até completar o total */
+export async function allPages(fetchPage) {
+  const out = [];
+  for (let page = 1; ; page++) {
+    const r = await fetchPage(page, 100);
+    out.push(...r.rows);
+    if (!r.rows.length || out.length >= r.total) return out;
+  }
+}
+
+/** texto do que a célula mostra: selos, links e campos (valor); botões e ícones ficam de fora */
+function cellText(v) {
+  if (v === null || v === undefined || v === false) return '';
+  if (Array.isArray(v)) return v.map(cellText).filter(Boolean).join(' ');
+  if (!(v instanceof Node)) return String(v);
+  if (v.nodeType === Node.TEXT_NODE) return v.textContent;
+  if (v.nodeType !== Node.ELEMENT_NODE) return '';
+  const tag = v.tagName;
+  if (tag === 'BUTTON' || tag === 'svg' || tag === 'SCRIPT') return '';
+  if (tag === 'SELECT') return v.selectedOptions[0]?.textContent ?? '';
+  if (tag === 'INPUT') return v.type === 'checkbox' || v.type === 'radio' ? (v.checked ? 'Sim' : 'Não') : v.value;
+  if (tag === 'TEXTAREA') return v.value;
+  return [...v.childNodes].map(cellText).filter((t) => t.trim()).join(' ');
+}
+const limpa = (t) => t.replace(/\s+/g, ' ').trim();
+
+/** nome do arquivo: título da tela + data */
+function arquivo(nome, ext) {
+  const base = (nome || document.getElementById('lf-title')?.textContent || document.title || 'registros')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return `${base || 'registros'}-${todayStr()}.${ext}`;
+}
+
+function baixar(conteudo, nome, tipo) {
+  const url = URL.createObjectURL(new Blob([conteudo], { type: tipo }));
+  const a = h('a', { href: url, download: nome });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** CSV no padrão do Excel brasileiro: ponto e vírgula e BOM para os acentos */
+export function toCsv(headers, linhas) {
+  // célula que começa como fórmula (=, +, @, -texto) vira texto no Excel: nome vindo do cardápio público entra aqui
+  const seguro = (t) => (/^[=+@\t\r]|^-(?![\d\s]|R\$)/.test(t) ? `'${t}` : t);
+  const q = (t) => { const v = seguro(t); return /[";\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
+  return `\ufeff${[headers, ...linhas].map((l) => l.map(q).join(';')).join('\r\n')}\r\n`;
+}
+
+/** XML: <registros><registro><campo>…; o nome da tag vem do rótulo da coluna */
+export function toXml(headers, linhas) {
+  const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    // caracteres de controle não valem em XML 1.0
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '');
+  const usadas = new Map();
+  const tags = headers.map((l) => {
+    let t = l.replace(/^n[º°]/i, 'numero').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'campo';
+    if (/^(\d|xml)/.test(t)) t = `c_${t}`;
+    const n = (usadas.get(t) ?? 0) + 1;
+    usadas.set(t, n);
+    return n > 1 ? `${t}_${n}` : t;
+  });
+  const corpo = linhas.map((l) => `  <registro>\n${l.map((v, i) => `    <${tags[i]}>${esc(v)}</${tags[i]}>`).join('\n')}\n  </registro>`);
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<registros>\n${corpo.join('\n')}${corpo.length ? '\n' : ''}</registros>\n`;
+}
+
+/** exporta linhas já montadas (cabeçalho + valores em texto) no formato pedido */
+export function baixarExportacao(formato, headers, linhas, nome) {
+  if (formato === 'csv') baixar(toCsv(headers, linhas), arquivo(nome, 'csv'), 'text/csv;charset=utf-8');
+  else baixar(toXml(headers, linhas), arquivo(nome, 'xml'), 'application/xml;charset=utf-8');
+}
+
+/** botões "CSV" e "XML" que exportam as colunas rotuladas das linhas que `getRows` devolver */
+export function exportBar(columns, getRows, nome) {
+  const cols = columns.filter((c) => c.label);
+  const ir = async (formato, btn) => {
+    const bloqueio = exportBlock();
+    if (bloqueio) return toast(bloqueio, 'warning');
+    btn.disabled = true;
+    try {
+      const rows = await getRows();
+      const linhas = rows.map((r) => cols.map((c) => limpa(cellText(c.exportValue ? c.exportValue(r) : c.cell(r)))));
+      baixarExportacao(formato, cols.map((c) => c.label), linhas, nome);
+      toast(`${rows.length} registro(s) exportado(s) em ${formato.toUpperCase()}.`);
+    } catch (e) {
+      toast(e.message || 'Não foi possível exportar.', 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  const botao = (formato) => {
+    const b = h('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', title: `Exportar em ${formato.toUpperCase()}` },
+      icon('download', 14), ` ${formato.toUpperCase()}`);
+    b.onclick = () => ir(formato, b);
+    return b;
+  };
+  return h('div', { class: 'lf-export d-flex justify-content-end align-items-center gap-1 mb-2' },
+    h('span', { class: 'f-12 txt-secondary me-1' }, 'Exportar'), botao('csv'), botao('xml'));
 }
 
 /** Card padrão: primeira coluna vira título, as demais viram linhas rótulo/valor. */

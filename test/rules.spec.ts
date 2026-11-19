@@ -2187,6 +2187,17 @@ async function main() {
     assert.equal(JSON.parse((await db.menuOrder.findUniqueOrThrow({ where: { id: semBar.data.id } })).items)[0].stationId, padrao.id);
   });
 
+  const { checkContactImports } = await import('./contact-imports');
+  await checkContactImports({ check, api, caixa, outra, garcom, db, base });
+  const { checkWhatsAppBot } = await import('./whatsapp-bot');
+  await checkWhatsAppBot({ check, api, outra, caixa, garcom, moto1, app, db, novoPedido, pixMock });
+
+  const { checkBeverageCatalog } = await import('./beverage-catalog');
+  await checkBeverageCatalog({ check, api, outra, caixa, moto1, db, base });
+
+  const { checkGroceryCatalog } = await import('./grocery-catalog');
+  await checkGroceryCatalog({ check, api, outra, db });
+
   await app.close();
   gateway.close();
   await db.$disconnect();

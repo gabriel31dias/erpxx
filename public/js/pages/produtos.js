@@ -65,6 +65,7 @@ export default async function render({ content, can, branchId }) {
     const data = await get('/products', state);
 
     lista.replaceChildren(dataList({
+      fetchPage: (page, pageSize) => get('/products', { ...state, page, pageSize }),
       rows: data.rows,
       empty: 'Nenhum produto encontrado.',
       emptyAction: novo,

@@ -1,6 +1,7 @@
 // Cadastro/edição de produto em tela própria + histórico de movimentações.
 import { get, patch, post, uploadImage } from '../api.js';
 import { pageTitle } from '../shell.js';
+import { beverageCatalog } from '../beverage-catalog.js';
 import { mount,
   card, centsToInput, field, fmtBRL, fmtQty, h, input, moneyInput, moneyToCents, parseQty, refreshIcons,
   select, textarea, toast,
@@ -164,13 +165,15 @@ export default async function render({ content, can, branchId }) {
     optionGroups: grupos(opcoes.optionGroups ?? []),
   };
 
+  const catalog = beverageCatalog({ f, product: p, categories: categorias, editable: editavel });
+
   // foto: envia e preenche o campo de URL
   const foto = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', class: 'd-none' });
   const enviarFoto = h('button', { type: 'button', class: 'btn btn-outline-primary', onclick: () => foto.click() }, 'Enviar foto');
   foto.onchange = async () => {
     if (!foto.files[0]) return;
     enviarFoto.disabled = true;
-    try { f.imageUrl.value = await uploadImage(foto.files[0]); toast('Foto enviada. Salve o produto.'); }
+    try { f.imageUrl.value = await uploadImage(foto.files[0]); catalog.refreshPhoto(); toast('Foto enviada. Salve o produto.'); }
     catch (e) { toast(e.message, 'error'); } finally { enviarFoto.disabled = false; foto.value = ''; }
   };
 
@@ -188,7 +191,9 @@ export default async function render({ content, can, branchId }) {
 
   const salvar = h('button', { class: 'btn btn-primary', type: 'submit' }, id ? 'Salvar alterações' : 'Cadastrar produto');
   const form = h('form', { class: 'row g-3' },
-    field('Nome do produto', f.name, { col: 'col-12 col-md-6' }),
+    catalog.intro,
+    h('div', { class: 'col-12' }, field('Nome do produto', f.name, { col: 'col-12 p-0' }), catalog.status, catalog.results),
+    catalog.photo,
     field('Código de barras', f.barcode, { col: 'col-12 col-md-3' }),
     field('SKU', f.sku, { col: 'col-6 col-md-3' }),
     field('Código interno', f.internalCode, { col: 'col-6 col-md-3' }),
@@ -216,6 +221,7 @@ export default async function render({ content, can, branchId }) {
     h('div', { class: 'col-12 mt-2' }, h('hr', {}),
       h('h6', { class: 'txt-primary mb-0' }, 'Dados fiscais (NF-e)'),
       h('small', { class: 'txt-secondary' }, 'Usados na emissão da nota. NCM é obrigatório; CSOSN vale para o Simples Nacional e CST ICMS para o regime normal.')),
+    catalog.fiscal, catalog.fiscalSearch,
     field('NCM', f.ncm, { col: 'col-6 col-md-3' }),
     field('CEST', f.cest, { col: 'col-6 col-md-3' }),
     field('CFOP', f.cfop, { col: 'col-6 col-md-3' }),
@@ -277,6 +283,7 @@ export default async function render({ content, can, branchId }) {
         minStock: parseQty(f.minStock.value),
         maxStock: parseQty(f.maxStock.value),
         imageUrl: f.imageUrl.value.trim() || undefined,
+        catalogBarcode: catalog.value(),
         description: f.description.value.trim() || undefined,
         active: f.active.value === 'true',
         // fiscais (NF-e)

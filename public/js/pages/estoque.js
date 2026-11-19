@@ -109,6 +109,7 @@ export default async function render({ content, can, branchId }) {
       );
 
       lista.replaceChildren(dataList({
+        fetchPage: (page, pageSize) => get('/stock', { ...state, page, pageSize }),
         rows: data.rows,
         empty: 'Nenhum produto encontrado.',
         columns: [
@@ -181,6 +182,7 @@ export default async function render({ content, can, branchId }) {
       lista.replaceChildren(h('div', { class: 'lf-skeleton', style: 'height:140px' }));
       const data = await get('/stock/movements', state);
       lista.replaceChildren(dataList({
+        fetchPage: (page, pageSize) => get('/stock/movements', { ...state, page, pageSize }),
         rows: data.rows,
         empty: 'Nenhuma movimentação no período.',
         columns: [
@@ -222,6 +224,7 @@ export default async function render({ content, can, branchId }) {
       lista.replaceChildren(h('div', { class: 'lf-skeleton', style: 'height:120px' }));
       const data = await get('/stock/entries', state);
       lista.replaceChildren(dataList({
+        fetchPage: (page, pageSize) => get('/stock/entries', { ...state, page, pageSize }),
         rows: data.rows,
         empty: 'Nenhuma entrada registrada.',
         emptyAction: can('estoque.entrada')

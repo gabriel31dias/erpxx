@@ -53,6 +53,7 @@ const toAppProduct = (p) => ({
   oldPrice: p.old_price,
   description: p.description,
   image: p.image_url || pub('assets/placeholder.svg'),
+  imageCredit: p.image_credit || null,
   thumb: p.image_url || pub('assets/placeholder.svg'),
   additionals: p.additionals.map((a) => ({ id: a.name, name: a.name, price: a.price })),
   sizes: p.sizes || [],

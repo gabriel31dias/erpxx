@@ -19,6 +19,21 @@ const STATUS = {
   OPEN: ['Aberta', 'secondary'],
 };
 
+/** só o status mais recente: cancelada/devolvida > cobrança na maquininha > não paga > concluída */
+function situacao(s) {
+  if (s.status !== 'COMPLETED') {
+    return h('span', { class: `badge text-bg-${STATUS[s.status]?.[1] ?? 'light'}` }, STATUS[s.status]?.[0] ?? s.status);
+  }
+  if (PAGAMENTO[s.paymentStatus]) {
+    return h('span', { class: `badge text-bg-${PAGAMENTO[s.paymentStatus][1]}` }, PAGAMENTO[s.paymentStatus][0]);
+  }
+  if (s.financeStatus === 'unpaid') {
+    return h('span', { class: 'badge text-bg-warning', title: s.dueDate ? `Vence em ${fmtDate(s.dueDate)}` : '' },
+      `Não paga${s.dueDate ? ` · vence ${fmtDate(s.dueDate)}` : ''}`);
+  }
+  return h('span', { class: 'badge text-bg-success' }, 'Concluída');
+}
+
 export default async function render({ content, can, branchId }) {
   const state = {
     from: todayStr().slice(0, 8) + '01', to: todayStr(), status: '', q: '',
@@ -96,6 +111,7 @@ export default async function render({ content, can, branchId }) {
     );
 
     lista.replaceChildren(dataList({
+      fetchPage: (page, pageSize) => get('/sales', { ...state, page, pageSize }),
       rows: data.rows,
       empty: 'Nenhuma venda no período.',
       columns: [
@@ -108,15 +124,7 @@ export default async function render({ content, can, branchId }) {
         { label: 'Total', className: 'text-end', cell: (s) => h('strong', {}, fmtBRL(s.totalCents)) },
         {
           label: 'Situação',
-          cell: (s) => h('div', { class: 'd-flex flex-wrap gap-1' },
-            h('span', { class: `badge text-bg-${STATUS[s.status]?.[1] ?? 'light'}` }, STATUS[s.status]?.[0] ?? s.status),
-            PAGAMENTO[s.paymentStatus]
-              ? h('span', { class: `badge text-bg-${PAGAMENTO[s.paymentStatus][1]}` }, PAGAMENTO[s.paymentStatus][0])
-              : null,
-            s.financeStatus === 'unpaid'
-              ? h('span', { class: 'badge text-bg-warning', title: s.dueDate ? `Vence em ${fmtDate(s.dueDate)}` : '' },
-                `Não paga${s.dueDate ? ` · vence ${fmtDate(s.dueDate)}` : ''}`)
-              : null),
+          cell: (s) => situacao(s),
         },
         {
           label: '', className: 'text-end',

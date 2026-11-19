@@ -7,3 +7,5 @@ certs
 data/uploads
 data/menu-images
 data/sqlite-*
+# Raw public research responses; normalized catalog and provenance are versioned.
+data/catalog/sources/

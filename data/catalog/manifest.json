@@ -1,0 +1,188 @@
+{
+  "researchedAt": "2026-11-17T04:21:16.499Z",
+  "inputRows": 25314,
+  "products": 25234,
+  "withImages": 25234,
+  "brands": 2768,
+  "markets": {
+    "Brasil": 11432,
+    "Internacional": 13802
+  },
+  "categories": {
+    "Achocolatados e cacau": 76,
+    "Alimentos infantis": 69,
+    "Arroz": 161,
+    "Atum e sardinha": 89,
+    "Açúcares e adoçantes": 142,
+    "Bebidas vegetais": 92,
+    "Biscoitos e bolachas": 831,
+    "Cafés": 241,
+    "Carnes, aves e pescados": 364,
+    "Castanhas, grãos e sementes": 127,
+    "Cereais, aveia e granolas": 300,
+    "Cervejas": 749,
+    "Chocolates e doces": 1008,
+    "Chás e infusões": 182,
+    "Chás e kombuchas": 1600,
+    "Congelados e pratos prontos": 209,
+    "Conservas e enlatados": 180,
+    "Energéticos": 2386,
+    "Espumantes": 31,
+    "Farinhas, farofas e amidos": 267,
+    "Feijão e leguminosas": 104,
+    "Frios e embutidos": 285,
+    "Geleias, pastas e cremes": 408,
+    "Gins": 81,
+    "Hortifruti embalado": 216,
+    "Ingredientes para confeitaria": 141,
+    "Iogurtes e sobremesas lácteas": 640,
+    "Isotônicos": 857,
+    "Leite condensado e creme de leite": 108,
+    "Leite em pó e compostos lácteos": 73,
+    "Leites e bebidas lácteas": 410,
+    "Licores e aperitivos": 243,
+    "Manteigas e margarinas": 193,
+    "Massas e macarrão": 318,
+    "Molhos e condimentos": 435,
+    "Outras bebidas": 291,
+    "Outras bebidas alcoólicas": 154,
+    "Ovos": 101,
+    "Pães, bolos e torradas": 658,
+    "Queijos e requeijão": 849,
+    "Refrigerantes": 6652,
+    "Runs e cachaças": 106,
+    "Sal e temperos": 256,
+    "Salgadinhos, pipoca e amendoim": 591,
+    "Sopas e refeições prontas": 63,
+    "Sorvetes e gelados": 338,
+    "Sucos e néctares": 508,
+    "Tequilas": 12,
+    "Vinhos": 71,
+    "Vodkas": 126,
+    "Whiskies": 132,
+    "Água de coco": 29,
+    "Águas": 581,
+    "Óleos, azeites e vinagres": 100
+  },
+  "packaging": {
+    "Barril": 1,
+    "Caixa": 681,
+    "Caixinha": 83,
+    "Garrafa": 812,
+    "Garrafa PET": 393,
+    "Garrafa de vidro": 350,
+    "Lata": 925,
+    "Long neck": 2,
+    "Não informada": 20198,
+    "Pacote": 1286,
+    "Pote": 378,
+    "Sachê": 125
+  },
+  "fiscalCodes": 10589,
+  "license": {
+    "database": "ODbL 1.0",
+    "contents": "Database Contents License",
+    "images": "CC BY-SA 3.0",
+    "databaseUrl": "https://opendatacommons.org/licenses/odbl/1-0/",
+    "imagesUrl": "https://creativecommons.org/licenses/by-sa/3.0/"
+  },
+  "sources": [
+    {
+      "name": "Open Food Facts / Mirabelle",
+      "url": "https://mirabelle.openfoodfacts.org/products",
+      "files": [
+        "brands-beer.json",
+        "brands-soda.json",
+        "brands-soft.json",
+        "brands-spirits.json",
+        "brands-wine.json",
+        "brazil-drinks.json",
+        "mirabelle-1.json",
+        "off-initial.json"
+      ]
+    },
+    {
+      "name": "NCM Receita Federal / Siscomex",
+      "url": "https://portalunico.siscomex.gov.br/classif/api/publico/nomenclatura/download/json",
+      "version": "Vigente em 17/11/2026"
+    },
+    {
+      "name": "Portfólio HEINEKEN Brasil",
+      "url": "https://www.heinekenbrasil.com.br/nossas-marcas"
+    },
+    {
+      "name": "Portfólio Coca-Cola FEMSA",
+      "url": "https://coca-cola-femsa.com.br/?r=nosso-portfolio"
+    },
+    {
+      "name": "Portfólio Ambev BEES",
+      "url": "https://support.mybees.com.br/hc/pt-br/articles/35689320681495-Quais-s%C3%A3o-os-produtos-que-a-Ambev-vende"
+    },
+    {
+      "name": "Open Food Facts / Mirabelle — alimentos brasileiros",
+      "url": "https://mirabelle.openfoodfacts.org/products",
+      "files": [
+        "grocery-br-01.json",
+        "grocery-br-02.json",
+        "grocery-br-03.json",
+        "grocery-br-04.json",
+        "grocery-br-05.json",
+        "grocery-br-06.json",
+        "grocery-br-07.json"
+      ]
+    },
+    {
+      "name": "Camil — portfólio",
+      "url": "https://www.camil.com.br/"
+    },
+    {
+      "name": "Nestlé — categorias de marcas",
+      "url": "https://www.nestle.com.br/marcas"
+    },
+    {
+      "name": "Bauducco — portfólio",
+      "url": "https://www.bauducco.com.br/"
+    }
+  ],
+  "imageVerification": {
+    "method": "URL da foto frontal associada ao mesmo GTIN na fonte; não são imagens geradas ou fotos genéricas da marca.",
+    "httpAndVisualSample": [
+      "7894900010015",
+      "7894900700015",
+      "7894900530001",
+      "7896045506064",
+      "78935495"
+    ],
+    "sampleCheckedAt": "2026-11-17",
+    "note": "A coleção não foi revisada visualmente por inteiro. Fotos comunitárias variam de qualidade e dependem da disponibilidade da fonte."
+  },
+  "extendedAt": "2026-11-17T04:35:09.014Z",
+  "kinds": {
+    "BEVERAGE": 14609,
+    "GROCERY": 10625
+  },
+  "groceries": {
+    "inputRows": 34847,
+    "products": 10625,
+    "sourceFiles": [
+      "grocery-br-01.json",
+      "grocery-br-02.json",
+      "grocery-br-03.json",
+      "grocery-br-04.json",
+      "grocery-br-05.json",
+      "grocery-br-06.json",
+      "grocery-br-07.json"
+    ],
+    "scope": "Alimentos de mercearia associados ao mercado brasileiro, com marca, GTIN válido e foto frontal vinculada ao mesmo código.",
+    "selection": "Cobertura por categorias e marcas. A fonte não fornece ranking de vendas e a coleção não equivale a todos os SKUs comercializados.",
+    "imageSample": {
+      "checkedAt": "2026-11-17",
+      "method": "HTTP 200 e inspeção visual do produto/volume da foto",
+      "barcodes": [
+        "7896006711155",
+        "7891100794905",
+        "7896089011357"
+      ]
+    }
+  }
+}

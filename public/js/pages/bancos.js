@@ -121,6 +121,7 @@ export default async function render({ content, can }) {
       lista.replaceChildren(
         h('p', { class: 'txt-secondary mb-2' }, `Saldo da conta: `, h('strong', {}, fmtBRL(data.balanceCents))),
         dataList({
+          fetchPage: (page, pageSize) => get(`/finance/bank-accounts/${accId}/transactions`, { ...state, page, pageSize }),
           rows: data.rows,
           empty: 'Sem movimentos nesta conta.',
           columns: [

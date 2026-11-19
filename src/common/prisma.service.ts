@@ -7,6 +7,7 @@ const TENANT_MODELS = new Set([
   'StockEntry', 'StockEntryItem', 'Customer', 'PaymentMethod', 'Sale', 'SaleItem', 'SalePayment', 'SaleAttachment',
   'CashRegister', 'CashSession', 'CashMovement', 'FinancialCategory', 'FinanceEntry',
   'Notification', 'AuditLog', 'Subscription', 'IdempotencyKey', 'MenuOrder', 'KitchenStation', 'KitchenTicket',
+  'WhatsAppBot', 'WhatsAppAuth', 'WhatsAppMessage',
 ]);
 
 const GUARDED_OPS = new Set([

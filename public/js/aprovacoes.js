@@ -76,6 +76,7 @@ async function carregar() {
     abas(data.counts);
     list.replaceChildren(
       dataList({
+        fetchPage: (page, pageSize) => get('/platform/accounts', { status, page, pageSize }),
         rows: data.rows,
         empty: status === 'pendente' ? 'Nenhuma conta aguardando aprovação.' : 'Nenhuma conta aqui.',
         columns: [

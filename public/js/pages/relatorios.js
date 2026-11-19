@@ -2,7 +2,9 @@
 // produtos parados e estoque — com exportação CSV quando o plano permite.
 import { get } from '../api.js';
 import { pageTitle } from '../shell.js';
-import { mount, card, chart, fmtBRL, fmtQty, h, icon, input, refreshIcons, select, statCard, toast, todayStr } from '../ui.js';
+import {
+  mount, card, chart, exportBar, fmtBRL, fmtQty, h, icon, input, refreshIcons, select, statCard, toast, todayStr,
+} from '../ui.js';
 
 const AGRUPAR = [
   { value: 'day', label: 'Por dia' },
@@ -74,7 +76,15 @@ export default async function render({ content, can, me, branchId }) {
       colors: ['#7366ff'], dataLabels: { enabled: false },
     });
 
-    tabela.replaceChildren(h('div', { class: 'table-responsive' }, h('table', { class: 'table align-middle mb-0' },
+    const agrupado = AGRUPAR.find((a) => a.value === state.groupBy).label.toLowerCase().replace(/ /g, '-');
+    tabela.replaceChildren(exportBar([
+      { label: 'Referência', cell: (r) => r.label },
+      { label: 'Vendas', cell: (r) => String(r.count) },
+      { label: 'Quantidade', cell: (r) => (r.quantity ? fmtQty(r.quantity) : '') },
+      { label: 'Total', cell: (r) => fmtBRL(r.totalCents) },
+      { label: 'Custo', cell: (r) => fmtBRL(r.costCents) },
+      { label: 'Lucro', cell: (r) => fmtBRL(r.profitCents) },
+    ], async () => data.rows, `vendas-${agrupado}`), h('div', { class: 'table-responsive' }, h('table', { class: 'table align-middle mb-0' },
       h('thead', {}, h('tr', {},
         h('th', {}, 'Referência'), h('th', { class: 'text-end' }, 'Vendas'),
         h('th', { class: 'text-end' }, 'Quantidade'), h('th', { class: 'text-end' }, 'Total'),
@@ -87,7 +97,13 @@ export default async function render({ content, can, me, branchId }) {
         h('td', { class: 'text-end' }, fmtBRL(r.costCents)),
         h('td', { class: 'text-end' }, fmtBRL(r.profitCents))))))));
 
-    parados.replaceChildren(h('div', { class: 'table-responsive' }, h('table', { class: 'table align-middle mb-0' },
+    // a tela mostra os 25 primeiros; a exportação leva todos
+    parados.replaceChildren(exportBar([
+      { label: 'Produto', cell: (p) => p.name },
+      { label: 'Vendido', cell: (p) => fmtQty(p.quantity, p.unit) },
+      { label: 'Faturado', cell: (p) => fmtBRL(p.totalCents) },
+      { label: 'Estoque', cell: (p) => fmtQty(p.stock, p.unit) },
+    ], async () => slow.rows, 'produtos-parados'), h('div', { class: 'table-responsive' }, h('table', { class: 'table align-middle mb-0' },
       h('thead', {}, h('tr', {},
         h('th', {}, 'Produto'), h('th', { class: 'text-end' }, 'Vendido'),
         h('th', { class: 'text-end' }, 'Faturado'), h('th', { class: 'text-end' }, 'Estoque'))),

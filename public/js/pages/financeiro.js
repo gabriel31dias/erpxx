@@ -103,6 +103,7 @@ export default async function render({ content, can, branchId }) {
       : h('p', { class: 'txt-secondary mb-0' }, 'Sem lançamentos pagos no período.'));
 
     lista.replaceChildren(dataList({
+      fetchPage: (page, pageSize) => get('/finance/entries', { ...state, page, pageSize }),
       rows: data.rows,
       empty: 'Nenhum lançamento no período.',
       columns: [

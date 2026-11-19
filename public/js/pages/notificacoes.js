@@ -17,6 +17,7 @@ export default async function render({ content }) {
     lista.replaceChildren(h('div', { class: 'lf-skeleton', style: 'height:120px' }));
     const data = await get('/notifications', state);
     lista.replaceChildren(dataList({
+      fetchPage: (page, pageSize) => get('/notifications', { ...state, page, pageSize }),
       rows: data.rows,
       empty: 'Nenhuma notificação.',
       columns: [

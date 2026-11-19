@@ -11,6 +11,7 @@ import { AuthGuard } from './common/auth.guard';
 import { HttpErrorFilter } from './common/error.filter';
 import { AuthModule } from './modules/auth';
 import { CatalogModule } from './modules/catalog';
+import { BeverageCatalogModule } from './modules/beverage-catalog';
 import { CrmModule } from './modules/crm';
 import { StockModule } from './modules/stock';
 import { SalesModule } from './modules/sales';
@@ -33,6 +34,7 @@ import { PlatformModule } from './modules/platform';
 import { TerminalsModule } from './modules/terminals';
 import { MENU_IMAGES_DIR, MenuModule } from './modules/menu';
 import { DeliveryModule } from './modules/delivery';
+import { WhatsAppBotModule } from './modules/whatsapp-bot';
 
 // O tema Riho fica na pasta do starter kit; se copiado para dentro do projeto, usa a cópia local.
 const localAssets = join(__dirname, '..', 'public', 'assets');
@@ -51,6 +53,7 @@ const menuAppRoots = existsSync(join(menuApp, 'index.html'))
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
     CoreModule,
+    WhatsAppBotModule,
     // PDV dispara muitas leituras por minuto (busca por código): teto generoso por IP.
     // THROTTLE_LIMIT ajusta por ambiente (atrás de proxy, todos os caixas somam no mesmo IP).
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: Number(process.env.THROTTLE_LIMIT) || 600 }]),
@@ -61,7 +64,7 @@ const menuAppRoots = existsSync(join(menuApp, 'index.html'))
       ...menuAppRoots,
       { rootPath: join(__dirname, '..', 'public'), exclude: ['/api/{*path}'] },
     ),
-    AuthModule, CatalogModule, CrmModule, StockModule, SalesModule, CashModule,
+    AuthModule, CatalogModule, BeverageCatalogModule, CrmModule, StockModule, SalesModule, CashModule,
     FinanceModule, ReportsModule, CompanyModule, UsersModule, BillingModule, ImportsModule, PaymentsModule, FiscalModule, MiscModule, SellersModule, AttachmentsModule, PricingModule, CreditModule, FieldModule, PlatformModule, TerminalsModule, MenuModule, DeliveryModule,
   ],
   providers: [

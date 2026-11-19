@@ -64,6 +64,7 @@ const MENU = [
   { key: 'vendedores', href: '/vendedores.html', label: 'Vendedores externos', icon: 'contact', perm: 'usuario.gerenciar' },
   { key: 'empresa', href: '/empresa.html', label: 'Empresa e filiais', icon: 'others', perm: 'empresa.gerenciar' },
   { key: 'configuracoes', href: '/configuracoes.html', label: 'Configurações', icon: 'others', perm: 'empresa.gerenciar' },
+  { key: 'boot-whats', href: '/boot-whats.html', label: 'Boot Whats', icon: 'chat', perm: 'empresa.gerenciar' },
   { key: 'assinatura', href: '/assinatura.html', label: 'Assinatura', icon: 'bonus-kit', perm: 'plano.gerenciar' },
   { key: 'auditoria', href: '/auditoria.html', label: 'Auditoria', icon: 'file', perm: 'auditoria.visualizar' },
 ];
@@ -307,6 +308,7 @@ const pages = [
   ['vendedores', 'Vendedores externos', 'vendedores.html', ''],
   ['empresa', 'Empresa e filiais', 'empresa.html', ''],
   ['configuracoes', 'Configurações', 'configuracoes.html', ''],
+  ['boot-whats', 'Boot Whats', 'boot-whats.html', ''],
   ['assinatura', 'Assinatura', 'assinatura.html', ''],
   ['auditoria', 'Auditoria', 'auditoria.html', ''],
   ['perfil', 'Meu perfil', 'perfil.html', ''],

@@ -10,12 +10,13 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import type { Company, MenuOrder } from '@prisma/client';
-import { PRISMA, Db } from '../common/prisma.service';
+import { PRISMA, Db, Tx, TX } from '../common/prisma.service';
 import { CurrentUser, Perms, SessionUser } from '../common/auth.guard';
 import { AuditService, TimeService } from '../common/core';
 import { DATE_RE } from '../common/util';
 import { FieldModule, GeoService, PingDto } from './field';
 import { MenuEvents, MenuModule, menuOf, OrderItem, toApiStore } from './menu';
+import { enqueueDelivery } from './whatsapp-events';
 
 class CourierPingsDto {
   @IsArray() @ArrayMaxSize(500) @ValidateNested({ each: true }) @Type(() => PingDto) pings!: PingDto[];
@@ -184,16 +185,20 @@ export class CourierController {
   /** aceitar: a troca só acontece se ninguém pegou antes (dois toques ao mesmo tempo, um ganha) */
   @Post('orders/:id/accept') @HttpCode(200)
   async accept(@CurrentUser() u: SessionUser, @Param('id') id: string) {
-    const r = await this.db.menuOrder.updateMany({
-      where: { id, ...available(u.companyId) },
-      data: { courierId: u.sub, courierAt: new Date(), status: 'delivering' },
-    });
-    const o = await this.db.menuOrder.findFirst({ where: { id, companyId: u.companyId } });
-    if (!o || o.deliveryType !== 'delivery') throw new NotFoundException('Pedido não encontrado.');
-    if (!r.count) {
-      if (o.courierId === u.sub && o.status === 'delivering') return toCourierOrder(o); // toque repetido
-      throw new ConflictException(o.courierId ? 'Outro motoboy já pegou este pedido.' : 'Este pedido não está mais disponível.');
-    }
+    const { o, accepted } = await this.db.$transaction(async (tx) => {
+      const r = await tx.menuOrder.updateMany({
+        where: { id, ...available(u.companyId) },
+        data: { courierId: u.sub, courierAt: new Date(), status: 'delivering' },
+      });
+      const o = await tx.menuOrder.findFirst({ where: { id, companyId: u.companyId } });
+      if (!o || o.deliveryType !== 'delivery') throw new NotFoundException('Pedido não encontrado.');
+      if (!r.count && !(o.courierId === u.sub && o.status === 'delivering')) {
+        throw new ConflictException(o.courierId ? 'Outro motoboy já pegou este pedido.' : 'Este pedido não está mais disponível.');
+      }
+      if (r.count) await enqueueDelivery(tx as Tx, o, 'dispatched');
+      return { o, accepted: !!r.count };
+    }, TX);
+    if (!accepted) return toCourierOrder(o); // toque repetido
     await this.audit.log(u, 'courier_accept', 'MenuOrder', id, { numero: o.number });
     this.events.emit('update', o);
     return toCourierOrder(o);

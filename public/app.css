@@ -205,6 +205,8 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .lf-ped-rodape .lf-ped-acao { flex: 1 0 auto; max-width: 100%; justify-content: center; }
 .btn.lf-ped-acao { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; background: var(--ped); border-color: var(--ped); color: #fff; font-weight: 600; }
 .btn.lf-ped-acao:hover { filter: brightness(.92); color: #fff; }
+.lf-ped-acao-txt { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; text-align: left; white-space: normal; }
+.lf-ped-acao-txt small { font-size: 11px; font-weight: 400; opacity: .9; }
 
 /* novo: o sino chama atenção; parado há mais de 10 min, o card inteiro avisa */
 .lf-ped-novo .lf-ped-topo .lf-ped-icone { animation: lf-ped-pulso 1.6s ease-in-out infinite; }
@@ -246,3 +248,18 @@ body.dark-only .lf-ped { border-top-color: var(--ped); }
 body.dark-only .lf-ped-chip, body.dark-only .lf-ped-det-qtd, body.dark-only .lf-ped-bloco { background: rgba(255, 255, 255, .06); }
 body.dark-only .lf-ped-rodape { border-top-color: rgba(255, 255, 255, .1); }
 body.dark-only .lf-ped-linha li::before, body.dark-only .lf-ped-linha-bola { background: rgba(255, 255, 255, .12); }
+
+/* Catálogo de bebidas: foto e embalagem na escolha, prévia no cadastro. */
+.lf-catalog-intro{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:20px;background:#f0f5ff;border:1px solid #d6e3ff;border-radius:12px;color:#23395c}
+.lf-catalog-filters{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:13px}
+.lf-catalog-filters select{max-width:250px}.lf-beverage-results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;max-height:440px;overflow-y:auto;margin-top:10px;padding:2px}
+.lf-beverage-results[hidden],.lf-catalog-fiscal[hidden]{display:none}
+.lf-beverage-option{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:12px;border:1px solid #d9e0e9;border-radius:10px;background:#fff;color:#26344a;min-height:100px}
+.lf-beverage-option:hover,.lf-beverage-option:focus-visible,.lf-beverage-option[aria-selected="true"]{border-color:#4678db;background:#edf4ff;outline:2px solid #b9d0fb}
+.lf-beverage-option img{width:64px;height:80px;object-fit:contain;flex-shrink:0;background:white;border-radius:6px}.lf-beverage-option-copy{display:flex;flex-direction:column;gap:5px;min-width:0;overflow-wrap:anywhere}.lf-beverage-option small{color:#526079;line-height:1.4}
+.lf-product-photo{display:flex;align-items:center;gap:22px;overflow-wrap:anywhere}.lf-product-photo:empty{display:none}.lf-product-photo-image{width:140px;height:160px;object-fit:contain;border:1px solid #e0e5ee;border-radius:12px;background:#fff}.lf-product-photo small{display:block;margin-top:8px}
+.lf-catalog-fiscal{padding:16px;background:#f6f9fe;border:1px solid #dce5f4;border-radius:10px;color:#26344a}.lf-fiscal-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;font-size:13px}.lf-fiscal-row button{flex-shrink:0}
+@media(max-width:767px){.lf-catalog-intro{align-items:stretch;flex-direction:column;padding:14px}.lf-beverage-results{grid-template-columns:1fr}.lf-catalog-filters{align-items:flex-start;flex-direction:column;gap:10px}.lf-product-photo{gap:12px}.lf-product-photo-image{width:90px;height:120px}}
+.lf-beverage-photo-box{position:relative;display:flex;align-items:center;justify-content:center;width:64px;height:80px;flex-shrink:0;background:#f7f9fc;border-radius:6px;overflow:hidden}.lf-beverage-photo-status{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;font-size:10px!important;padding:2px;background:#f7f9fc}
+.lf-catalog-filters{justify-content:flex-end}.lf-catalog-filters select{min-width:170px}.lf-catalog-intro>div:first-child{flex:1;min-width:220px}.lf-catalog-filters{max-width:540px}
+@media(max-width:767px){.lf-catalog-filters{max-width:none;align-items:stretch}.lf-catalog-filters select{width:100%;max-width:none}.lf-catalog-intro>div:first-child{min-width:0}}

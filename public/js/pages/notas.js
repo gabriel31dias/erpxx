@@ -48,6 +48,7 @@ export default async function render({ content, can }) {
       lista.replaceChildren(h('div', { class: 'lf-skeleton', style: 'height:160px' }));
       const data = await get('/fiscal/documents', state);
       lista.replaceChildren(dataList({
+        fetchPage: (page, pageSize) => get('/fiscal/documents', { ...state, page, pageSize }),
         rows: data.rows,
         empty: 'Nenhuma nota emitida ainda. Emita a partir de uma venda.',
         columns: [

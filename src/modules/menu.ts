@@ -33,6 +33,7 @@ import { FieldModule, GeoService } from './field';
 import type { UploadFile } from './attachments';
 import { MENU_FEE_SKU, MENU_ROLE, MENU_SERVICE_SKU, SalesModule, SalesService } from './sales';
 import { can } from '../common/rbac';
+import { enqueueDelivery } from './whatsapp-events';
 
 /**
  * Fotos do cardápio (logo, banner, produtos). Pasta própria e pública, servida em /uploads/menu
@@ -219,7 +220,7 @@ export const toApiStore = (c: Company, m: MenuSettings) => ({
 const priced = (x: Priced) => ({ name: x.name, price: reais(x.priceCents) });
 
 const toApiProduct = (p: { id: string; categoryId: string | null; name: string; description: string | null;
-  priceCents: number; oldPriceCents: number | null; imageUrl: string | null; menuOptions: string; position: number }) => {
+  priceCents: number; oldPriceCents: number | null; imageUrl: string | null; catalogReference?: {imageUrl:string; sourceUrl:string; imageAttribution:string; imageLicense:string}|null; menuOptions: string; position: number }) => {
   const o = menuOptions(p.menuOptions);
   return {
     id: p.id,
@@ -229,6 +230,7 @@ const toApiProduct = (p: { id: string; categoryId: string | null; name: string; 
     price: reais(p.priceCents),
     old_price: p.oldPriceCents == null ? null : reais(p.oldPriceCents),
     image_url: p.imageUrl,
+    image_credit: p.catalogReference && (p.catalogReference.imageUrl === p.imageUrl || /^https:\/\/images\.openfoodfacts\.org\//.test(p.imageUrl || '')) ? {source_url:p.catalogReference!.sourceUrl,attribution:p.catalogReference!.imageAttribution,license:p.catalogReference!.imageLicense} : null,
     additionals: o.additionals.map(priced),
     sizes: o.sizes.map(priced),
     option_groups: o.optionGroups.map((g) => ({ name: g.name, min: g.min, max: g.max, items: g.items.map(priced) })),
@@ -299,6 +301,7 @@ async function catalog(db: Db, c: Company, m: MenuSettings) {
     }),
     db.product.findMany({
       where: { companyId: c.id, active: true, menuVisible: true, deletedAt: null },
+      include: { catalogReference: true },
       orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
     }),
   ]);
@@ -338,12 +341,14 @@ async function insertOrder(db: Db, companyId: string, data: Omit<Prisma.MenuOrde
     await tx.$queryRaw`SELECT id FROM "Company" WHERE id = ${companyId} FOR UPDATE`;
     const last = await tx.menuOrder.aggregate({ where: { companyId }, _max: { number: true } });
     const items = await routeItems(tx as Tx, companyId, cozinha.id, JSON.parse(data.items as string));
-    return tx.menuOrder.create({
+    const order = await tx.menuOrder.create({
       data: {
         ...data, items: JSON.stringify(items), companyId, number: (last._max.number ?? 0) + 1,
         tickets: { createMany: { data: ticketsFor(companyId, items) } },
       },
     });
+    await enqueueDelivery(tx as Tx, order, 'received');
+    return order;
   });
 }
 
@@ -630,9 +635,13 @@ export class PublicMenuController {
       const st = await this.pix.status(o.companyId, o.pixChargeId);
       const next = st.paid ? 'approved' : REJECTED.includes(st.status) ? 'rejected' : 'pending';
       if (next !== o.paymentStatus) {
-        o = await this.db.menuOrder.update({
-          where: { id: o.id },
-          data: { paymentStatus: next, ...(next === 'rejected' ? { status: 'cancelled' } : {}) },
+        o = await this.db.$transaction(async (tx) => {
+          const updated = await tx.menuOrder.update({
+            where: { id: o.id },
+            data: { paymentStatus: next, ...(next === 'rejected' ? { status: 'cancelled' } : {}) },
+          });
+          if (next === 'approved') await enqueueDelivery(tx as Tx, updated, 'received');
+          return updated;
         });
         // Pix pago: só agora o pedido entra na fila da cozinha
         if (next === 'approved') this.events.emit('new', o);
@@ -899,9 +908,13 @@ export class MenuController {
     const saleId = dto.status === 'delivered' && o.table == null
       ? await this.toSale(u, [o], { payments: pay, branchId: dto.branchId }, req.ip)
       : null;
-    await ticketsFollow(this.db, u.companyId, id, dto.status);
-    const updated = await this.db.menuOrder.update({
-      where: { id }, data: { status: dto.status, ...stamps(o, dto.status), ...unassign, ...(saleId ? { saleId, deliveredAt: new Date() } : {}) },
+    const updated = await this.db.$transaction(async (tx) => {
+      await ticketsFollow(tx as Tx, u.companyId, id, dto.status);
+      const updated = await tx.menuOrder.update({
+        where: { id }, data: { status: dto.status, ...stamps(o, dto.status), ...unassign, ...(saleId ? { saleId, deliveredAt: new Date() } : {}) },
+      });
+      await enqueueDelivery(tx as Tx, updated, 'dispatched');
+      return updated;
     });
     await this.audit.log(u, 'status', 'MenuOrder', id, { numero: o.number, de: o.status, para: dto.status }, req.ip);
     this.events.emit('update', updated);

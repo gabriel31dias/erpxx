@@ -214,7 +214,7 @@ const ADDRESS_KEYS = ['address', 'zip', 'street', 'number', 'city', 'state'] as 
  * ("Rua Augusta, 500 - sala 2, Consolação, São Paulo - SP, 01305-000") para as
  * telas e o app que só leem uma linha; sem eles, vale o texto livre enviado.
  */
-function addressOf(dto: CustomerDto) {
+export function addressOf(dto: CustomerDto) {
   const t = (v?: string) => v?.trim() || null;
   const parts = {
     zip: dto.zip ? dto.zip.replace(/\D/g, '') : null, street: t(dto.street), number: t(dto.number),

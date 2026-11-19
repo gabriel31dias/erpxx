@@ -18,6 +18,7 @@ import { StockService } from './stock';
 import { PricingModule, PricingService } from './pricing';
 import { CreditModule, CreditService, installmentPlan } from './credit';
 import { fmtBRL, itemTotalCents, paging, roundQty } from '../common/util';
+import { enqueuePurchase } from './whatsapp-events';
 
 export const SALE_STATUS = ['OPEN', 'COMPLETED', 'CANCELLED', 'REFUNDED'];
 const UNPAID = { status: 'pending', deletedAt: null };
@@ -374,6 +375,7 @@ export class SalesService {
             });
           }
         }
+        if (a.role !== MENU_ROLE) await enqueuePurchase(tx as Tx, created);
         return created;
       }, TX));
 
@@ -638,6 +640,7 @@ export class SalesService {
           data: { status: 'paid', paidAt: day },
         })).count;
       }
+      await enqueuePurchase(tx as Tx, updated);
       return { sale: updated, changed: true, settled, before: sale.paymentStatus };
     }, TX);
 

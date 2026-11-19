@@ -1,6 +1,7 @@
 // Lista de fornecedores.
 import { del, get } from '../api.js';
 import { pageTitle } from '../shell.js';
+import { openContactImport } from '../contact-imports.js';
 import { mount,
   confirmAction, dataList, debounce, h, icon, input, paginator, refreshIcons, select, toast,
 } from '../ui.js';
@@ -22,7 +23,10 @@ export default async function render({ content, can }) {
   const novo = editavel ? h('a', { class: 'btn btn-primary', href: '/fornecedor.html' }, icon('plus', 16), ' Novo fornecedor') : null;
 
   mount(content,
-    pageTitle('Fornecedores', novo),
+    pageTitle('Fornecedores', editavel ? h('button', {
+      type: 'button', class: 'btn btn-outline-secondary',
+      onclick: () => openContactImport('suppliers', () => { state.page = 1; return carregar(); }),
+    }, icon('upload', 16), ' Importar') : null, novo),
     h('div', { class: 'card' }, h('div', { class: 'card-body' },
       h('div', { class: 'row g-2 mb-3' },
         h('div', { class: 'col-12 col-md-6' }, busca),
@@ -33,6 +37,7 @@ export default async function render({ content, can }) {
     lista.replaceChildren(h('div', { class: 'lf-skeleton', style: 'height:120px' }));
     const data = await get('/suppliers', state);
     lista.replaceChildren(dataList({
+      fetchPage: (page, pageSize) => get('/suppliers', { ...state, page, pageSize }),
       rows: data.rows,
       empty: 'Nenhum fornecedor encontrado.',
       emptyAction: novo,

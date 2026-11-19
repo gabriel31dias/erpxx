@@ -106,6 +106,10 @@ export function Screen05DetalheProduto() {
         {/* White Details Card Overlay */}
         <div className="relative flex-1 -mt-6 bg-white rounded-t-[30px] px-5 pt-5 pb-28 shadow-2xl space-y-4">
 
+          {product.imageCredit && <p className="text-[10px] text-slate-500">
+            Foto: <a href={product.imageCredit.source_url} target="_blank" rel="noopener noreferrer" className="underline">{product.imageCredit.attribution}</a>
+            {' · '}<a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noopener noreferrer" className="underline">{product.imageCredit.license}</a>
+          </p>}
           {/* Title & Price */}
           <div className="flex items-baseline justify-between gap-3">
             <h1 className="text-2xl font-black text-slate-900 tracking-tight">

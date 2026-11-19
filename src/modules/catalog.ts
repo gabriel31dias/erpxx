@@ -53,6 +53,7 @@ class ProductDto {
   @IsOptional() @IsNumber() @Min(0) minStock?: number;
   @IsOptional() @IsNumber() @Min(0) maxStock?: number;
   @IsOptional() @IsString() imageUrl?: string;
+  @IsOptional() @IsString() @MaxLength(14) catalogBarcode?: string;
   @IsOptional() @IsBoolean() active?: boolean;
   /** Estoque inicial só na criação; depois tudo passa por movimentação. */
   @IsOptional() @IsNumber() @Min(0) initialStock?: number;
@@ -244,7 +245,7 @@ export class ProductsController {
   async detail(@CurrentUser() u: SessionUser, @Param('id') id: string, @Query('branchId') branchId?: string) {
     const product = await this.db.product.findFirst({
       where: { id, companyId: u.companyId, deletedAt: null },
-      include: { category: true, stocks: { include: { branch: { select: { id: true, name: true } } } } },
+      include: { category: true, catalogReference: true, stocks: { include: { branch: { select: { id: true, name: true } } } } },
     });
     if (!product) throw new NotFoundException('Produto não encontrado.');
 
@@ -276,9 +277,10 @@ export class ProductsController {
     await this.assertUnique(u.companyId, dto);
 
     const stationId = await stationOrNull(this.db, u.companyId, dto.stationId);
+    const reference = await this.reference(dto);
     const entrada = dto.initialStock ? await this.entryCtx(u) : null;
     const product = await this.db.$transaction(async (tx) => {
-      const created = await tx.product.create({ data: { ...this.data(dto), stationId, companyId: u.companyId } });
+      const created = await tx.product.create({ data: { ...this.data(dto), ...reference, stationId, companyId: u.companyId } });
       if (entrada) await this.entry(tx as Tx, u, entrada, created, dto.initialStock!, 'Estoque inicial do cadastro');
       return created;
     }, TX);
@@ -296,9 +298,10 @@ export class ProductsController {
     }
 
     const stationId = await stationOrNull(this.db, u.companyId, dto.stationId);
+    const reference = await this.reference(dto, before.catalogBarcode);
     const entrada = dto.addStock ? await this.entryCtx(u) : null;
     const product = await this.db.$transaction(async (tx) => {
-      const updated = await tx.product.update({ where: { id }, data: { ...this.data(dto), stationId } });
+      const updated = await tx.product.update({ where: { id }, data: { ...this.data(dto), ...reference, stationId } });
       if (entrada) await this.entry(tx as Tx, u, entrada, updated, dto.addStock!, 'Entrada pelo cadastro do produto');
       return updated;
     }, TX);
@@ -338,6 +341,14 @@ export class ProductsController {
       companyId: u.companyId, branchId: ctx.branchId, productId: product.id, type: 'ENTRADA',
       quantity, reason: notes, refType: 'StockEntry', refId: entry.id, userId: u.sub, at: ctx.at,
     });
+  }
+
+  private async reference(dto: ProductDto, previous?: string | null) {
+    const barcode = dto.catalogBarcode === undefined ? previous : dto.catalogBarcode;
+    if (!barcode || barcode !== dto.barcode?.trim()) return { catalogBarcode: null };
+    const reference = await this.db.beverageReference.findUnique({ where: { barcode } });
+    if (!reference) throw new BadRequestException('Referência do catálogo não encontrada.');
+    return { catalogBarcode: barcode };
   }
 
   private data(dto: ProductDto) {

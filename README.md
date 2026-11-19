@@ -21,6 +21,48 @@ Cardápio digital (app do cliente, em `cardapio/`): `cd cardapio && npm install 
 
 Produção: `npm run build && npm start`. Banco: PostgreSQL (`DATABASE_URL` no `.env`).
 
+### Importação de clientes e fornecedores
+
+Nas telas **Clientes** e **Fornecedores**, clique em **Importar**. O fluxo aceita Excel
+(`.xlsx`, primeira aba), XML e CSV, com até 3 MB e 1.000 registros por arquivo. O próprio
+diálogo oferece modelos de exemplo nos três formatos. No Excel, mantenha CPF/CNPJ e CEP
+como texto para preservar zeros à esquerda.
+
+Revise o mapeamento das colunas e a prévia antes de confirmar. O nome é obrigatório;
+o mesmo CPF/CNPJ atualiza um cadastro da empresa, e registros sem documento criam novos
+cadastros. Campos vazios preservam os valores existentes. Linhas inválidas são informadas
+e ignoradas. A operação exige permissão para gerenciar o cadastro e um plano com importação.
+Ao enviar apenas um novo endereço em texto livre, ele substitui o endereço anterior,
+incluindo os campos estruturados de rua, CEP e cidade.
+
+### Boot Whats
+
+Em **Administração → Boot Whats**, clique em **Conectar WhatsApp**. No celular, abra
+**WhatsApp → Aparelhos conectados → Conectar um aparelho** e leia o QR Code da tela.
+Depois ative as mensagens automáticas, escolha os avisos e salve os textos.
+
+- **Compra concluída:** venda com cliente cadastrado e WhatsApp/telefone preenchido;
+  pagamentos de maquininha aguardam a aprovação.
+- **Pedido recebido:** novo pedido de delivery; no PIX, após confirmar o pagamento.
+- **Pedido despachado:** mudança para `delivering`, tanto no ERP quanto no aceite do motoboy.
+
+Os textos aceitam `{cliente}`, `{loja}`, `{numero}`, `{total}`, `{endereco}` e `{itens}`.
+O bot começa desligado. Conectar a conta não ativa os envios. Mesa e retirada não recebem
+os avisos de delivery. Eventos repetidos usam a mesma entrada na fila; a fila aguarda conexão,
+repete falhas temporárias até cinco vezes e mostra o resultado em **Últimos envios**.
+Pedidos cancelados antes do envio são descartados. Desativar o bot pausa a fila.
+
+A integração usa [Baileys](https://github.com/WhiskeySockets/Baileys), uma biblioteca
+de WhatsApp Web não oficial. A sessão é persistida no PostgreSQL, separada por empresa
+e cifrada com `WHATSAPP_SESSION_KEY` (ou `JWT_SECRET` quando não configurada). Mantenha essa
+chave estável para reconectar após reiniciar o servidor. **Desconectar** encerra a sessão
+e remove as credenciais locais. A tela e as ações exigem `empresa.gerenciar`.
+
+Após atualizar, execute `npm install`, `npx prisma db push`, `npm run build` e `npm run pages`,
+e reinicie a aplicação. Requer Node.js 20 ou superior. Execute o ERP em um único processo
+(o mesmo requisito dos eventos de pedidos); múltiplas réplicas precisam de coordenação
+da sessão de WhatsApp. A suíte usa um transporte simulado e não envia mensagens reais.
+
 ### Aprovação de contas
 
 Loja cadastrada pelo `/cadastro.html` nasce **pendente**: não entra até um aprovador da
@@ -197,3 +239,9 @@ vencido ou assinatura suspensa bloqueiam escrita). A cobrança em si ainda não 
   requisição; a fila entra quando doer.
 - Relatórios agregam em memória sobre um recorte já filtrado por período — vira `GROUP BY` se o
   volume crescer.
+
+### Catálogo de alimentos e bebidas com fotos
+
+Em **Produtos → Novo produto**, digite nome, marca, peso, embalagem, volume ou código de barras. Escolha uma sugestão com foto para preencher o cadastro. O catálogo combinado tem 25.234 referências com imagem: 10.625 alimentos de mercearia e 14.609 bebidas. Use os filtros de tipo/categoria; referências do mercado brasileiro aparecem primeiro. Custo, preço e estoque são informados pela loja.
+
+Pesquisa, cobertura, licenças e atualização: [docs/catalogo-mercearia.md](docs/catalogo-mercearia.md). Histórico da primeira pesquisa: [docs/catalogo-bebidas.md](docs/catalogo-bebidas.md). Dados em `data/catalog/products.json` e `groceries.json`; importação com `npx ts-node --transpile-only tools/catalog/import.ts` após aplicar o schema. A referência pública pode ser baixada em `/api/product-catalog/export`.

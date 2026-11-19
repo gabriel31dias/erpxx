@@ -4,30 +4,30 @@ import { get, patch, post } from '../api.js';
 import { branchId, pageTitle } from '../shell.js';
 import { ouvirPedidos } from '../pedidos-ao-vivo.js';
 import {
-  askReason, card, centsToInput, field, fmtBRL, h, icon, modal, moneyInput, moneyToCents, mount, paginator, refreshIcons, select,
+  allPages, askReason, card, centsToInput, exportBar, field, fmtBRL, h, icon, modal, moneyInput, moneyToCents, mount, paginator, refreshIcons, select,
   toast,
 } from '../ui.js';
 
 // `cor` vira a classe lf-ped-<cor> (app.css): faixa, ícone e chip do card
 const STATUS = {
-  pending: { label: 'Novo', cor: 'novo', icone: 'bell', next: 'preparing', action: 'Aceitar e preparar', acaoIcone: 'check' },
-  preparing: { label: 'Preparando', cor: 'preparo', icone: 'clock', next: 'ready', action: 'Pronto', acaoIcone: 'check' },
+  pending: { label: 'Novo', cor: 'novo', icone: 'bell', next: 'preparing' },
+  preparing: { label: 'Preparando', cor: 'preparo', icone: 'clock', next: 'ready' },
   // a cozinha marca pronto (tela da cozinha); daqui o balcão despacha
-  ready: { label: 'Pronto', cor: 'pronto', icone: 'package', next: 'delivering', action: 'Saiu para entrega', acaoIcone: 'truck' },
-  delivering: { label: 'Saiu para entrega', cor: 'rota', icone: 'truck', next: 'delivered', action: 'Entregue', acaoIcone: 'check-circle' },
+  ready: { label: 'Pronto', cor: 'pronto', icone: 'package', next: 'delivering' },
+  delivering: { label: 'Saiu para entrega', cor: 'rota', icone: 'truck', next: 'delivered' },
   delivered: { label: 'Entregue', cor: 'feito', icone: 'check-circle' },
   cancelled: { label: 'Cancelado', cor: 'cancelado', icone: 'x-circle' },
 };
 /** mesa: depois de pronto é servido, sem entrega; a venda sai ao fechar a conta */
 const MESA = {
   ...STATUS,
-  ready: { ...STATUS.ready, label: 'Pronto para servir', next: 'delivered', action: 'Servido', acaoIcone: 'check-circle' },
+  ready: { ...STATUS.ready, label: 'Pronto para servir', next: 'delivered' },
   delivered: { ...STATUS.delivered, label: 'Servido' },
 };
 /** retirada: pronto já é "pode buscar"; não passa por "saiu para entrega" */
 const RETIRADA = {
   ...STATUS,
-  ready: { ...STATUS.ready, label: 'Pronto para retirar', next: 'delivered', action: 'Retirado', acaoIcone: 'check-circle' },
+  ready: { ...STATUS.ready, label: 'Pronto para retirar', next: 'delivered' },
   delivered: { ...STATUS.delivered, label: 'Retirado' },
 };
 const fluxo = (o) => (o.table != null ? MESA : o.deliveryType === 'pickup' ? RETIRADA : STATUS);
@@ -63,6 +63,14 @@ const whatsapp = (fone) => {
   const n = fone.replace(/\D/g, '');
   return `https://wa.me/${n.length <= 11 ? `55${n}` : n}`;
 };
+/** botão que move o pedido para a próxima etapa, já com a cor e o ícone dela */
+function botaoMover(o, attrs) {
+  const prox = etapa(o, etapa(o, o.status).next);
+  return h('button', { ...attrs, class: `${attrs.class} lf-ped-acao lf-ped-${prox.cor}`, title: `Mover para ${prox.label}` },
+    icon(prox.icone, 16),
+    h('span', { class: 'lf-ped-acao-txt' }, h('small', {}, 'Mover para'), h('strong', {}, prox.label)),
+    icon('arrow-right', 14));
+}
 const chip = ({ icone, texto }, extra = '') => h('span', { class: `lf-ped-chip ${extra}` }, icon(icone, 13), texto);
 
 /** etapas em andamento, na ordem dos contadores do topo */
@@ -87,11 +95,27 @@ export default async function render({ content, can }) {
   const aoVivo = h('span', { class: 'badge text-bg-secondary', role: 'status', 'aria-live': 'polite' }, 'Conectando…');
   const lista = h('div', {});
   const rodape = h('div', {});
+  // exporta todos os pedidos do filtro escolhido, não só a página
+  const exportar = exportBar([
+    { label: 'Nº', cell: (o) => `#${o.number}` },
+    { label: 'Recebido', cell: (o) => new Date(o.createdAt).toLocaleString('pt-BR').slice(0, 17) },
+    { label: 'Status', cell: (o) => etapa(o, o.status).label },
+    { label: 'Tipo', cell: (o) => tipo(o).texto },
+    { label: 'Cliente', cell: (o) => (o.table != null ? `Mesa ${o.table}` : o.customerName) },
+    { label: 'Telefone', cell: (o) => o.customerPhone },
+    { label: 'Endereço', cell: (o) => o.address },
+    { label: 'Itens', cell: (o) => o.items.map((i) => `${i.quantity}x ${i.name}`).join(', ') },
+    { label: 'Observação', cell: (o) => o.notes },
+    { label: 'Pagamento', cell: (o) => pagamento(o).texto },
+    { label: 'Taxa de entrega', cell: (o) => fmtBRL(o.deliveryFeeCents) },
+    { label: 'Total', cell: (o) => fmtBRL(o.totalCents) },
+    { label: 'Motivo do cancelamento', cell: (o) => o.cancelReason },
+  ], () => allPages((p, pageSize) => get('/menu/orders', { status: filtro, page: p, pageSize })), 'pedidos');
 
   mount(content, pageTitle('Pedidos do cardápio',
     can('cardapio.gerenciar') ? h('a', { class: 'btn btn-outline-secondary', href: '/cardapio.html' }, 'Configurar cardápio') : null),
   resumo,
-  card(null, h('div', {}, h('div', { class: 'mb-3 d-flex flex-wrap gap-2 align-items-center justify-content-between' }, abas, aoVivo), lista, rodape)));
+  card(null, h('div', {}, h('div', { class: 'mb-3 d-flex flex-wrap gap-2 align-items-center justify-content-between' }, abas, aoVivo), exportar, lista, rodape)));
 
   function desenharAbas() {
     abas.replaceChildren(...FILTROS.map(([v, label]) => h('button', {
@@ -162,10 +186,7 @@ export default async function render({ content, can }) {
     const st = etapa(o, o.status);
     const qtd = o.items.reduce((n, i) => n + i.quantity, 0);
     const acao = gerencia && st.next && !o.saleId
-      ? h('button', {
-        class: `btn btn-sm lf-ped-acao lf-ped-${st.cor}`,
-        onclick: (e) => { e.stopPropagation(); avancar(o); },
-      }, icon(st.acaoIcone, 14), st.action)
+      ? botaoMover(o, { class: 'btn btn-sm', onclick: (e) => { e.stopPropagation(); avancar(o); } })
       : null;
     const quando = h('span', { class: 'lf-ped-tempo', 'data-desde': o.createdAt }, icon('clock', 12), desde(o.createdAt));
     return h('article', {
@@ -222,7 +243,7 @@ export default async function render({ content, can }) {
       gerencia && !['delivered', 'cancelled'].includes(o.status)
         ? h('button', { class: 'btn btn-outline-danger', onclick: fechaE(() => cancelar(o)) }, icon('x', 14), ' Cancelar pedido') : null,
       gerencia && st.next && !o.saleId
-        ? h('button', { class: `btn lf-ped-acao lf-ped-${st.cor}`, onclick: fechaE(() => avancar(o)) }, icon(st.acaoIcone, 14), ` ${st.action}`) : null,
+        ? botaoMover(o, { class: 'btn', onclick: fechaE(() => avancar(o)) }) : null,
     ].filter(Boolean);
 
     m = modal({

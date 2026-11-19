@@ -1,5 +1,5 @@
 // Gerado por tools/genpages.js — arquivos que ficam no aparelho.
-self.CACHE_VERSION = '131a0524e3';
+self.CACHE_VERSION = '7a2b645a3f';
 self.PRECACHE = [
   "/",
   "/aceitar-convite.html",
@@ -1042,6 +1042,7 @@ self.PRECACHE = [
   "/assets/svg/icon-sprite.svg",
   "/assets/svg/icon-sprite.svg#fill-bonus-kit",
   "/assets/svg/icon-sprite.svg#fill-charts",
+  "/assets/svg/icon-sprite.svg#fill-chat",
   "/assets/svg/icon-sprite.svg#fill-contact",
   "/assets/svg/icon-sprite.svg#fill-ecommerce",
   "/assets/svg/icon-sprite.svg#fill-file",
@@ -1058,6 +1059,7 @@ self.PRECACHE = [
   "/assets/svg/icon-sprite.svg#search-header",
   "/assets/svg/icon-sprite.svg#stroke-bonus-kit",
   "/assets/svg/icon-sprite.svg#stroke-charts",
+  "/assets/svg/icon-sprite.svg#stroke-chat",
   "/assets/svg/icon-sprite.svg#stroke-contact",
   "/assets/svg/icon-sprite.svg#stroke-ecommerce",
   "/assets/svg/icon-sprite.svg#stroke-file",
@@ -1073,6 +1075,7 @@ self.PRECACHE = [
   "/assinatura.html",
   "/auditoria.html",
   "/bancos.html",
+  "/boot-whats.html",
   "/cadastro.html",
   "/caixa.html",
   "/campo.html",
@@ -1111,12 +1114,15 @@ self.PRECACHE = [
   "/js/api.js",
   "/js/aprovacoes.js",
   "/js/auth.js",
+  "/js/beverage-catalog.js",
+  "/js/contact-imports.js",
   "/js/cozinha.js",
   "/js/mapa.js",
   "/js/offline.js",
   "/js/pages/assinatura.js",
   "/js/pages/auditoria.js",
   "/js/pages/bancos.js",
+  "/js/pages/boot-whats.js",
   "/js/pages/caixa.js",
   "/js/pages/campo.js",
   "/js/pages/cardapio.js",

@@ -31,6 +31,7 @@ export default async function render({ content, branchId }) {
     lista.replaceChildren(h('div', { class: 'lf-skeleton', style: 'height:120px' }));
     const data = await get('/cash/sessions', state);
     lista.replaceChildren(dataList({
+      fetchPage: (page, pageSize) => get('/cash/sessions', { ...state, page, pageSize }),
       rows: data.rows,
       empty: 'Nenhuma sessão de caixa no período.',
       columns: [

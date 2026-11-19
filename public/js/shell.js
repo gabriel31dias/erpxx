@@ -2,7 +2,7 @@
 // usuário, filial selecionada, busca global, notificações e carregamento da página.
 import { get, post } from './api.js';
 import { estado, pendentes, reenvioAutomatico, sincronizar } from './offline.js';
-import { $, debounce, emptyState, fmtBRL, h, icon, modal, refreshIcons, toast } from './ui.js';
+import { $, debounce, emptyState, fmtBRL, h, icon, modal, refreshIcons, setExportGate, toast } from './ui.js';
 import { ligarAlarmePedidos } from './pedidos-ao-vivo.js';
 
 export const ctx = { me: null, can: () => false, branchId: '' };
@@ -280,6 +280,9 @@ export async function boot() {
   }
   ctx.me = me;
   ctx.can = (perm) => me.permissions.includes(perm);
+  // exportar listagens segue a mesma regra dos relatórios: permissão e plano
+  setExportGate(() => (!ctx.can('relatorio.exportar') ? 'Seu perfil não tem permissão para exportar.'
+    : !me.company.plan.features.includes('export') ? 'A exportação está disponível a partir do plano Profissional.' : null));
   // perfil Cozinha só enxerga a tela da cozinha
   if (me.user.role === 'cozinha') {
     location.replace('/cozinha.html');

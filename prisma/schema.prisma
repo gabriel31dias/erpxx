@@ -180,8 +180,56 @@ model Company {
   couriers        CourierPosition[]
   kitchenStations KitchenStation[]
   kitchenTickets  KitchenTicket[]
+  whatsAppBot     WhatsAppBot?
+  whatsAppAuth    WhatsAppAuth[]
+  whatsAppMessages WhatsAppMessage[]
 
   @@index([status, createdAt])
+}
+
+// ---------- Boot Whats: configuração, sessão privada e fila de eventos ----------
+model WhatsAppBot {
+  companyId          String  @id
+  enabled            Boolean @default(false)
+  autoConnect        Boolean @default(false)
+  purchaseEnabled    Boolean @default(true)
+  receivedEnabled    Boolean @default(true)
+  dispatchedEnabled  Boolean @default(true)
+  purchaseTemplate   String  @default("")
+  receivedTemplate   String  @default("")
+  dispatchedTemplate String  @default("")
+  updatedAt          DateTime @updatedAt
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model WhatsAppAuth {
+  id        String @id @default(cuid())
+  companyId String
+  key       String
+  value     String // BufferJSON cifrado com AES-256-GCM; nunca exposto pela API
+  updatedAt DateTime @updatedAt
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  @@unique([companyId, key])
+}
+
+model WhatsAppMessage {
+  id                String @id @default(cuid())
+  companyId         String
+  event             String // purchase | received | dispatched
+  refId             String // venda ou pedido; evento único mesmo com reenvio da mudança de status
+  phone             String
+  message           String
+  status            String @default("pending") // pending | sending | sent | failed | cancelled
+  attempts          Int @default(0)
+  nextAttemptAt     DateTime @default(now())
+  providerMessageId String
+  lastError         String?
+  sentAt            DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  @@unique([companyId, event, refId])
+  @@index([companyId, status, nextAttemptAt])
 }
 
 model Branch {
@@ -345,6 +393,8 @@ model Product {
   minStock     Float   @default(0)
   maxStock     Float   @default(0)
   imageUrl     String?
+  catalogBarcode String?
+  catalogReference BeverageReference? @relation(fields: [catalogBarcode], references: [barcode], onDelete: SetNull)
   active       Boolean @default(true)
 
   // ---- Cardápio digital ----
@@ -1327,4 +1377,43 @@ model IdempotencyKey {
 
   @@unique([companyId, scope, key])
   @@index([companyId, createdAt])
+}
+
+// Referência pública pesquisada: preços, estoques e dados das empresas ficam em Product.
+model BeverageReference {
+  barcode           String @id
+  name              String
+  brand             String
+  manufacturerGroup String?
+  category          String
+  packaging         String?
+  quantityLabel     String?
+  volumeMl          Int?
+  weightGrams       Int?
+  kind              String @default("BEVERAGE") // BEVERAGE | GROCERY
+  active            Boolean @default(true)
+  packCount         Int @default(1)
+  market            String
+  imageUrl          String
+  imageLicense      String
+  imageAttribution  String
+  sourceUrl         String
+  sourceName        String
+  sourceUpdatedAt   DateTime?
+  searchText        String
+  importedAt        DateTime @default(now())
+  products          Product[]
+  @@index([brand])
+  @@index([category, market])
+  @@index([active, kind, market])
+}
+
+model FiscalCodeReference {
+  kind          String // NCM | CEST | CFOP
+  code          String
+  description   String
+  searchText    String
+  sourceUrl     String
+  sourceVersion String
+  @@id([kind, code])
 }
